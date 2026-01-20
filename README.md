@@ -6,14 +6,17 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
 ## À faire :
 
-1. 3 articles de recherche à trouver et à lire par personne.
+1. trois articles de recherche à trouver et à lire par personne.
 2. Faire le projet.
 3. Faire un rapport.
 
 
 ## Lien intéressant :
 
-1. Kaggle : https://www.kaggle.com
+1. Kaggle: https://www.kaggle.com
 2. Free Music Archive: https://freemusicarchive.org
-3. Recherche : https://dblp.org & https://dblp.uni-trier.de/search/publ
-4. Apache spark : https://spark.apache.org
+3. GTZAN Genre Collection: https://www.kaggle.com/datasets/carlthome/gtzan-genre-collection
+4. MusicGenres Dataset (HuggingFace): https://huggingface.co/datasets/ccmusic-database/music_genre
+5. MusicCaps / AudioSet: https://huggingface.co/datasets/google/MusicCaps
+6. Recherche: https://dblp.org & https://dblp.uni-trier.de/search/publ
+7. Apache spark: https://spark.apache.org
