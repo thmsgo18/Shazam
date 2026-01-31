@@ -7,6 +7,13 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 ## Notes pratiques
 
 1. Le fingerprinting audio est une technique qui permet d'identifier un son ou un morceau de musique à partir d'un extrait de mauvaise qualité. L'idée est que au lieu de comparer tout le fichier audio, on extrait une signature unique (comme une empreinte d'où le nom du principe).
+2. MFCC = Mel-Frequency Cepstral Coefficients. Les MFCC décrivent le timbre du son, la forme globale du spectre, pas les notes exactes mais la texture sonore. Ici c'est une fonction d'embedding.
+3. Pipeline d'une requette :
+   1. On vectorise le fichier audio donné.
+   2. On regarde dans la VDB.
+   3. On prend les N plus proches voisins.
+   4. On utilise la technique de fingerprinting sur ces N voisins.
+   5. On donne les infos de la musique trouvée par cette recherche.
 
 ## À faire
 
@@ -42,7 +49,6 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
     Les auteurs proposent une méthode filter-and-refine qui porte sur une adaptation de l’algorithme FastMap. L’idée est de projeter les morceaux de musique dans un espace vectoriel de plus faible dimension, afin d’effectuer une pré-sélection rapide des candidats les plus proches grâce à une distance euclidienne, puis d'améliorer les résultats avec la mesure exacte (divergence de Kullback–Leibler symétrisée).
 
-
 ### Clara
 
 1. [Music2Latent2: Audio Compression with Summary Embeddings and Autoregressive Decoding](research_paper/clara/Music2Latent2_audio_embeding.pdf)
@@ -51,7 +57,7 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
     L'objectif est de compresser efficacement des signaux audio dans un espace latent compact tout en préservant la qualité de reconstruction et l'utilité pour des tâches de music information retrieval (MIR), même à des ratios de compression élevés (64× à 128×).
 
-    L'article propose une méthode basée sur des summary embeddings (embeddings non ordonnés), où chaque embedding capture des caractéristiques globales distinctes d'un segment audio (timbre, tempo), contrairement aux approches classiques qui répètent redondamment ces informations. 
+    L'article propose une méthode basée sur des summary embeddings (embeddings non ordonnés), où chaque embedding capture des caractéristiques globales distinctes d'un segment audio (timbre, tempo), contrairement aux approches classiques qui répètent redondamment ces informations.
 
     Le décodage autorégressive réintroduit du bruit dans le chunk précédent pour éviter l'accumulation d'erreurs. Music2Latent2 surpasse les autoencodeurs existants sur les métriques de qualité audio (FAD/FADclap) et obtient des résultats supérieurs sur des tâches MIR comme l'autotagging ou la classification d'instruments.
 
@@ -61,11 +67,11 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
     L'objectif est d'accélérer la recherche de similarité vectorielle (Vector Similarity Search, VSS) en permettant un calcul de distance dimension par dimension, contrairement au format horizontal standard qui stocke les vecteurs bout-à-bout et nécessite d'accéder à toutes les dimensions même quand certaines ne sont jamais utilisées.
 
-    L'article propose un format qui stocke les vecteurs par blocs verticaux (toutes les valeurs d'une même dimension ensemble dans un bloc), ce qui permet de traiter plusieurs vecteurs simultanément. 
-    
+    L'article propose un format qui stocke les vecteurs par blocs verticaux (toutes les valeurs d'une même dimension ensemble dans un bloc), ce qui permet de traiter plusieurs vecteurs simultanément.
+
     - PDX-BOND est une stratégie de pruning flexible sans prétraitement qui fonctionne sur les vecteurs bruts et peut effectuer une recherche exacte. Les expériences montrent que PDX surpasse les systèmes vectoriels existants (FAISS, Milvus, USearch) de 2 à 7× en recherche exacte et approximative.
 
-    -  PDXearch, un framework qui adapte dynamiquement le nombre de dimensions explorées selon la requête, et avec des algorithmes de dimension-pruning qui approximent la distance en n'évaluant qu'un sous-ensemble de dimensions, permettant d'éliminer rapidement les vecteurs non-pertinents. 
+    - PDXearch, un framework qui adapte dynamiquement le nombre de dimensions explorées selon la requête, et avec des algorithmes de dimension-pruning qui approximent la distance en n'évaluant qu'un sous-ensemble de dimensions, permettant d'éliminer rapidement les vecteurs non-pertinents.
 
     PDX peut optimiser le calcul de distance lors de la recherche de l'extrait audio dans une base d'embeddings. PDX-BOND pourrait prioriser les dimensions les plus discriminantes pour éliminer rapidement les morceaux non-correspondants sans parcourir toutes les dimensions.
 
@@ -76,9 +82,6 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
     L'objectif est de créer des représentations audio universelles capables de capturer simultanément les informations sémantiques (genre, émotion) et acoustiques (mélodie, tonalité, timbre) de la musique, pour améliorer les performances sur les tâches de music information retrieval (MIR) comme le tagging, la classification d'instruments ou la détection de tonalité.
 
     L'article propose Mel-RVQ (Mel Residual Vector Quantization), un tokenizer léger qui quantifie directement le spectrogramme Mel via une projection linéaire résiduelle. Le modèle MuQ utilise une architecture Conformer (12 couches, 310M paramètres) entraînée par masked language modeling à prédire ces tokens multi-résiduels. Un entraînement itératif raffine les représentations en réentraînant Mel-RVQ sur les latents de MuQ.
-    
-
-
 
 ## Premiers pas
 
@@ -110,6 +113,14 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
         pip freeze > requirements.txt
         # Cette commande permet de mettre à jour les librairies nécessaires pour éxecuter le code du projet.
     ```
+
+### J'ai des modifications en local et je suis sur une ancienne version du projet
+
+```bash
+    git stash
+    git pull origin main
+    git stash pop
+```
 
 ## Structure du projet
 
