@@ -1,3 +1,11 @@
+"""
+src/audio/loading.py
+
+This module provides helper functions to load audio files in a standardized way
+across the project. It ensures consistent sampling rate and channel handling
+for downstream audio processing and embedding extraction.
+"""
+
 import numpy as np
 import librosa
 from src.config import SAMPLE_RATE

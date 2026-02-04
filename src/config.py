@@ -1,3 +1,16 @@
+"""
+src/config.py
+
+This file allows you to group together all the main configurations of the application.
+These different environment variables are divided into 5 categories :
+    - Audio
+    - Segmentation
+    - Features
+    - Vector search
+    - Embedding
+"""
+
+
 # Audio
 SAMPLE_RATE = 22050
 
