@@ -1,13 +1,13 @@
 """
 src/data_utils/build_metadata.py
 
-This script scans the raw audio dataset directory, extracts metadata for each audio file, and saves the results into a CSV file.
+This script scans the raw audio dataset directory, extracts metadata for each audio file, and saves the results into a parquet file.
 For each supported audio file, the script:
     - Generates a unique track ID based on the file path.
     - Computes the audio duration using librosa.
     - Stores metadata into a structured pandas DataFrame.
 
-The final metadata file is saved to: data/processed/metadata.csv
+The final metadata file is saved to: data/processed/metadata.parquet
 """
 from pathlib import Path
 import hashlib
@@ -41,4 +41,4 @@ for audio_file in RAW_DIR.rglob("*"): # Loop over all audio files in the folder 
 df = pd.DataFrame(rows) # Convert collected rows into a pandas DataFrame.
 
 Path("data/processed").mkdir(parents=True, exist_ok=True)   # Test if the output directory exists.
-df.to_csv("data/processed/metadata.csv", index=False)       # Save metadata to CSV file.
+df.to_parquet("data/processed/metadata.parquet", index=False)       # Save metadata to CSV file.

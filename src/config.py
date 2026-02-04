@@ -27,5 +27,5 @@ VECTOR_TOP_K_SEGMENTS = 200
 VECTOR_TOP_N_TRACKS = 20
 
 # Embedding
-EMBEDDING_METHOD = "clap"   # "mfcc" ou "clap"
+EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap"
 CLAP_MODEL_NAME = "laion/clap-htsat-unfused"

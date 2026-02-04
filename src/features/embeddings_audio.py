@@ -8,8 +8,6 @@ and the function that will be called each time, which will choose the embedding 
 
 import numpy as np
 import librosa
-import torch
-from transformers import ClapModel, ClapProcessor
 
 def mfcc_stats_embedding(waveform: np.ndarray, sr: int, n_mfcc: int = 20, n_fft: int = 2048, hop_length: int = 512, normalize: bool = True, eps: float = 1e-10) -> np.ndarray:
     """
@@ -65,6 +63,9 @@ def _load_clap(model_name: str, device: str | None = None):
         - processor: Associated CLAP processor.
         - device: Device where the model is loaded.
     """
+    import torch
+    from transformers import ClapModel, ClapProcessor
+
     # If a model is already cached we return directly to avoid reloading from disk or network.
     if _CLAP_CACHE["model"] is not None and _CLAP_CACHE["model_name"] == model_name:
         return _CLAP_CACHE["model"], _CLAP_CACHE["processor"], _CLAP_CACHE["device"]
@@ -73,7 +74,7 @@ def _load_clap(model_name: str, device: str | None = None):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     processor = ClapProcessor.from_pretrained(model_name)       # Load the CLAP processor.
-    model = ClapModel.from_pretrained(model_name).to(device)    # Load the pretrained CLAP model.
+    model = ClapModel.from_pretrained(model_name, use_safetensors=True).to(device)    # Load the pretrained CLAP model.
     model.eval()                                                # Set the model to evaluation mode.
 
     # Store loaded objects in cache for faster reuse in future calls :
