@@ -85,21 +85,23 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
 ### Vincent
 
-1. « Audio Fingerprinting – A Review » (Cano et al., 2005)
+1. [« Audio Fingerprinting – A Review » (Cano et al., 2005)](research_paper/vincent/audio_fingerprinting.pdf)
+   
    L’article propose une revue des systèmes de fingerprinting audio, vus comme des signatures compactes permettant d’identifier un enregistrement sans métadonnées ni watermark, et robustes aux distorsions usuelles.
 ​
 Les auteurs comparent fingerprinting et watermarking, détaillent les exigences (robustesse, compacité, pouvoir discriminant, scalabilité, efficacité) et les principaux usages : identification de titres, vérification d’intégrité, support au watermarking et recherche audio par similarité.
 ​
 Ils décrivent un cadre général avec front-end (prétraitement, analyse temps‑fréquence, extraction de descripteurs), modélisation d’empreintes et algorithmes de recherche efficaces (mesures de similarité, indexation, pruning).
 
-2. Indexing and Search for Fast Music Identification (Cha)
+2. [Indexing and Search for Fast Music Identification (Cha)](research_paper/vincent/fast_music_identification.pdf)
+   
    Cet article propose un nouvel algorithme d’indexation et de recherche pour identifier rapidement des chansons à partir de fingerprints binaires très haute dimension.
 Les chansons sont représentées comme des vecteurs de 3200 bits, formés d’environ 200 sous‑fingerprints de 16 bits extraits sur 16 bandes fréquentielles.
 Pour surmonter la malédiction de la dimension, l’auteur remplace les arbres classiques par un fichier inversé où chaque sous‑fingerprint pointe vers les chansons et positions où il apparaît.
 Il génère aussi, à l’indexation, des versions avec quelques bits inversés pour gérer les erreurs sans explosion du coût de recherche.
 La recherche utilise un accumulateur avec multiple sub‑fingerprint match, offset match et early termination, afin de ne charger la fingerprint complète que pour très peu de candidats.
 
-3. Predicting a Song Title from Audio Embeddings (Bleiweiss)
+3. [Predicting a Song Title from Audio Embeddings (Bleiweiss)](research_paper/vincent/predicting_song_title.pdf)
    Cet article présente un modèle de deep learning pour générer des titres de chansons à partir d’audio en réutilisant un réseau de captioning d’images pré‑entraîné (ResNet + LSTM).
 Le signal est converti en spectrogramme 2D traité comme une image, puis décodé en texte via un LSTM, après entraînement sur Conceptual Captions et adaptation sur Million Song Dataset et Free Music Archive.
 
