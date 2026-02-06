@@ -102,6 +102,7 @@ Il génère aussi, à l’indexation, des versions avec quelques bits inversés 
 La recherche utilise un accumulateur avec multiple sub‑fingerprint match, offset match et early termination, afin de ne charger la fingerprint complète que pour très peu de candidats.
 
 3. [Predicting a Song Title from Audio Embeddings (Bleiweiss)](research_paper/vincent/predicting_song_title.pdf)
+   
    Cet article présente un modèle de deep learning pour générer des titres de chansons à partir d’audio en réutilisant un réseau de captioning d’images pré‑entraîné (ResNet + LSTM).
 Le signal est converti en spectrogramme 2D traité comme une image, puis décodé en texte via un LSTM, après entraînement sur Conceptual Captions et adaptation sur Million Song Dataset et Free Music Archive.
 
