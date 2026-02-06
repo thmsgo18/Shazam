@@ -8,7 +8,7 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
 
 1. Le fingerprinting audio est une technique qui permet d'identifier un son ou un morceau de musique à partir d'un extrait de mauvaise qualité. L'idée est que au lieu de comparer tout le fichier audio, on extrait une signature unique (comme une empreinte d'où le nom du principe).
 2. MFCC = Mel-Frequency Cepstral Coefficients. Les MFCC décrivent le timbre du son, la forme globale du spectre, pas les notes exactes mais la texture sonore. Ici c'est une fonction d'embedding.
-3. Pipeline d'une requette :
+3. Pipeline d'une requête :
    1. On vectorise le fichier audio donné avec une fonction d'embedding (mfcc ou clap)
    2. On recherche dans la VDB grâce à FAISS.
    3. On prend les N plus proches voisins avec K-nn.
