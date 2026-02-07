@@ -46,6 +46,7 @@ def mfcc_stats_embedding(waveform: np.ndarray, sr: int, n_mfcc: int = 20, n_fft:
 
     return embedding
 
+# ******************** CLAP : ********************
 
 _CLAP_CACHE = {"model": None, "processor": None, "device": None, "model_name": None}
 
@@ -97,6 +98,7 @@ def clap_embedding(waveform: np.ndarray, sr: int, model_name: str, normalize: bo
     Returns:
         np.ndarray: A 1D embedding vector (typically size 512). Zero vector if the waveform is empty or None.
     """
+    import torch
     if waveform is None or len(waveform) == 0: # If waveform is None or empty.
         return np.zeros((512,), dtype=np.float32)
 
@@ -116,7 +118,173 @@ def clap_embedding(waveform: np.ndarray, sr: int, model_name: str, normalize: bo
 
     return emb
 
-def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", clap_model_name: str | None = None) -> np.ndarray:
+# ******************** MuQ : ********************
+
+_MUQ_CACHE = {"model": None, "device": None, "model_name": None}
+
+def _load_muq(model_name: str, device: str | None = None):
+    """
+    Load and cache a MuQ model (pretrained).
+    - Loads once, then reuses from cache for all segments.
+    - Uses GPU if available, otherwise CPU.
+    """
+    import torch
+    from muq import MuQ
+
+    # Reuse cached model if it matches the requested checkpoint
+    if _MUQ_CACHE["model"] is not None and _MUQ_CACHE["model_name"] == model_name:
+        return _MUQ_CACHE["model"], _MUQ_CACHE["device"]
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = MuQ.from_pretrained(model_name).to(device)
+    model.eval()
+
+    _MUQ_CACHE.update({"model": model, "device": device, "model_name": model_name})
+    return model, device
+
+
+def muq_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int = 24000, normalize: bool = True, eps: float = 1e-10) -> np.ndarray:
+    """
+    Compute an audio embedding using MuQ.
+
+    Strategy:
+    - Resample to target_sr (MuQ commonly expects 24kHz).
+    - Run MuQ forward -> BaseModelOutput
+    - Use mean pooling over time on last_hidden_state => fixed-size vector (H,)
+    - Optional L2 normalization.
+    """
+    import torch
+
+    # Handle empty input
+    if waveform is None or len(waveform) == 0:
+        # If possible, return correct dim based on model config; else fallback to 0-len safe vector
+        try:
+            model, _device = _load_muq(model_name=model_name)
+            h = int(getattr(model.config, "hidden_size", 0)) or 0
+            return np.zeros((h,), dtype=np.float32) if h > 0 else np.zeros((1,), dtype=np.float32)
+        except Exception:
+            return np.zeros((1,), dtype=np.float32)
+
+    # Ensure float32
+    y = np.asarray(waveform, dtype=np.float32)
+
+    # Resample if needed
+    if sr != target_sr:
+        # librosa.resample expects float array
+        y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+        sr = target_sr
+
+    # Load model (cached)
+    model, device = _load_muq(model_name=model_name)
+
+    # MuQ forward signature: forward(self, x, attention_mask=None, output_hidden_states=True)
+    # Build input tensor: (B=1, T)
+    x = torch.from_numpy(y).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        out = model(x)  # BaseModelOutput
+        hs = out.last_hidden_state  # (1, T', H)
+
+        # Mean pooling over time dimension => (1, H)
+        emb_t = hs.mean(dim=1)
+
+    emb = emb_t[0].detach().cpu().numpy().astype(np.float32)
+
+    if normalize:
+        norm = float(np.linalg.norm(emb))
+        emb = emb / max(norm, eps)
+
+    return emb
+
+from typing import List, Tuple
+
+def muq_batch_embeddings(
+    segments: List[np.ndarray],
+    sr: int,
+    model_name: str,
+    target_sr: int = 24000,
+    normalize: bool = True,
+    eps: float = 1e-10,
+) -> np.ndarray:
+    """
+    Compute MuQ embeddings for a batch of segments.
+
+    Returns:
+        emb: (B, H) float32
+    """
+    import time
+    t_rs = time.time()
+    import torch
+
+    if segments is None or len(segments) == 0:
+        return np.zeros((0, 0), dtype=np.float32)
+
+    # Resample each segment if needed, keep as float32
+    ys = []
+    lengths = []
+
+    for seg in segments:
+        if seg is None or len(seg) == 0:
+            ys.append(np.zeros((1,), dtype=np.float32))
+            lengths.append(1)
+            continue
+
+        y = np.asarray(seg, dtype=np.float32)
+        if sr != target_sr:
+            y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+        ys.append(y)
+        lengths.append(len(y))
+
+    # Pad to same length
+    max_len = max(lengths)
+    B = len(ys)
+
+    x = np.zeros((B, max_len), dtype=np.float32)
+    attn = np.zeros((B, max_len), dtype=np.int64)
+
+    for i, y in enumerate(ys):
+        L = len(y)
+        x[i, :L] = y
+        attn[i, :L] = 1
+
+    t_fwd = time.time()
+
+    # Load model (cached) and run forward
+    model, device = _load_muq(model_name=model_name)
+
+    x_t = torch.from_numpy(x).to(device)
+    attn_t = torch.from_numpy(attn).to(device)
+
+    with torch.no_grad():
+        out = model(x_t, attention_mask=attn_t)  # BaseModelOutput
+        hs = out.last_hidden_state  # (B, T', H)
+
+    # Pooling: masked mean if possible, else normal mean
+    # (Sometimes T' != max_len; in that case we fallback to mean)
+    if hs.shape[1] == attn_t.shape[1]:
+        mask = attn_t.unsqueeze(-1).float()  # (B, T, 1)
+        summed = (hs * mask).sum(dim=1)      # (B, H)
+        denom = mask.sum(dim=1).clamp_min(eps)  # (B, 1)
+        emb_t = summed / denom
+    else:
+        emb_t = hs.mean(dim=1)
+
+    emb = emb_t.detach().cpu().numpy().astype(np.float32)  # (B, H)
+
+    if normalize:
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.maximum(norms, eps)
+        
+    t_end = time.time()
+    print(f"[muq_batch] B={len(segments)} rs+pad={t_fwd-t_rs:.3f}s fwd={t_end-t_fwd:.3f}s")
+
+    return emb
+
+# ******************** Embedding general : ********************
+
+def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model_name: str | None = None, clap_model_name: str | None = None) -> np.ndarray:
     """
     Compute an audio embedding using the selected embedding method.
     This function routes the audio waveform to the appropriate embedding function based on the selected method (MFCC or CLAP).
@@ -136,6 +304,10 @@ def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", clap_mode
     method = method.lower()
     if method == "mfcc":
         return mfcc_stats_embedding(waveform, sr)
+    if method == "muq":
+        if muq_model_name is None:
+            raise ValueError("muq_model_name is required when method='muq'")
+        return muq_embedding(waveform, sr, model_name=muq_model_name)
     if method == "clap":
         if clap_model_name is None:
             raise ValueError("clap_model_name is required when method='clap'")

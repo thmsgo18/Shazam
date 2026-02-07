@@ -15,6 +15,9 @@ Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d
    4. On utilise la technique de fingerprinting sur ces N voisins.
    5. On labelise la musique trouvée par cette recherche.
 
+Pour l'instant, MuQ prends la blinde de temps... Il faut voir comment on pourrait l'utiliser.
+Et Clap ne marche pas dutout... Ca serait cool de comprendre pk et de resoudre le problème.
+
 ## À faire
 
 1. trois articles de recherche à trouver et à lire par personne.

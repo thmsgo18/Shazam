@@ -41,4 +41,4 @@ for audio_file in RAW_DIR.rglob("*"): # Loop over all audio files in the folder 
 df = pd.DataFrame(rows) # Convert collected rows into a pandas DataFrame.
 
 Path("data/processed").mkdir(parents=True, exist_ok=True)   # Test if the output directory exists.
-df.to_parquet("data/processed/metadata.parquet", index=False)       # Save metadata to CSV file.
+df.to_parquet("data/processed/metadata.parquet", index=False)       # Save metadata to parquet file.

@@ -16,7 +16,7 @@ SAMPLE_RATE = 22050
 
 # Segmentation
 SEGMENT_WIN_S = 5.0
-SEGMENT_HOP_S = 1.0
+SEGMENT_HOP_S = 3.0
 SEGMENT_MIN_WIN = 0.8
 
 # Features
@@ -27,5 +27,8 @@ VECTOR_TOP_K_SEGMENTS = 200
 VECTOR_TOP_N_TRACKS = 20
 
 # Embedding
-EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap"
+EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" "muq"
 CLAP_MODEL_NAME = "laion/clap-htsat-unfused"
+
+MUQ_SAMPLE_RATE = 24000.
+MUQ_MODEL_NAME = "OpenMuQ/MuQ-large-msd-iter"

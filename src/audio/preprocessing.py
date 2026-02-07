@@ -13,7 +13,7 @@ from src.config import (
 import numpy as np
 from typing import Iterator, Tuple
 
-def iter_segments( waveform: np.ndarray, sr: int, win_s: float = SEGMENT_WIN_S, hop_s: float = SEGMENT_HOP_S, min_win: float = SEGMENT_MIN_WIN)-> Iterator[Tuple[float, np.ndarray]]:
+def iter_segments(waveform: np.ndarray, sr: int, win_s: float = SEGMENT_WIN_S, hop_s: float = SEGMENT_HOP_S, min_win: float = SEGMENT_MIN_WIN)-> Iterator[Tuple[float, np.ndarray]]:
     """
     Iterate over fixed-size audio segments with optional overlap.
     This function splits an audio waveform into segments of a given window size, moving forward using a hop size. If the final remaining audio is long enough.
