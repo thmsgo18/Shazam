@@ -20,9 +20,8 @@ Et Clap ne marche pas dutout... Ca serait cool de comprendre pk et de resoudre l
 
 ## À faire
 
-1. trois articles de recherche à trouver et à lire par personne.
-2. Faire le projet.
-3. Faire un rapport.
+1. Faire le projet.
+2. Faire un rapport.
 
 ## Articles de recherche
 
