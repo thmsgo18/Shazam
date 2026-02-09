@@ -108,6 +108,28 @@ La recherche utilise un accumulateur avec multiple sub‑fingerprint match, offs
    Cet article présente un modèle de deep learning pour générer des titres de chansons à partir d’audio en réutilisant un réseau de captioning d’images pré‑entraîné (ResNet + LSTM).
 Le signal est converti en spectrogramme 2D traité comme une image, puis décodé en texte via un LSTM, après entraînement sur Conceptual Captions et adaptation sur Million Song Dataset et Free Music Archive.
 
+
+### Maria
+
+1. [Two birds with one stone : Query-dependent moment retrieval in muted video or audio via inter-token interactions](research_paper/maria/article_audio_tokens.pdf)
+
+    Cet article propose un cadre unifié (IAR) pour la récupération de moments temporels dans des audios (AMR : Audio Moment Retrieval) ou des vidéos muettes (MVRM : Muted Video Moment Retrieval) basés sur des requêtes textuelles. Il s'agit, par exmple, de localiser un segment audio correspondant à une description telle que "le chien aboie".
+
+    De l'importance est accordée aux interations en tokens, par exemple pour les séquences de features audios/textuelles, la préservation des frontières temporelles et une architectures légère pour une généralisation cross-modale (audio/vidéo).
+
+    Ces travaux mentionnent des techniques intéressantes pour l'extraction de features audios avec CRNN et peut donner des idées pour la gestion des données.
+
+2. [Sound and music biases in deep music transcription models : a systematic analysis](research_paper/maria/deep_music_transcription.pdf)
+
+   Le sujet de cet article porte sur la tarnscription automatique de musique (AMT) qui consiste à convertir un signal audio en représentation symbolique (notes avec pitch, onset, offset et velocity). Les progrès récents, basés sur des réseaux de neurones profonds (DNN), se concentrent principalement sur la musique classique pour piano, en raison de la disponibilité limitée de datasets annotés comme MAESTRO. Les auteurs examinent la robustesse de ces modèles face aux décalages de distribution (distribution shifts) en son (environnement d'enregistrement) et en musique (genre, polyphonie, dynamique), un aspect sous-exploré.
+   Cet article apporte des informations intéressantes en termes d'évaluation de datasets musicaux et de tests sur ces derniers.
+
+3. [Enhanced audio-visual speech enhancement with posterior sampling methods in recurrent variational autoencoders](research_paper/maria/audio_speech_enhancement.pdf)
+
+   Cet article aborde l'amélioration de la parole en présence de bruit. Les méthodes traditionnelles audio-seules ne fonctionnent pas de manière optimale dans les environnements bruyants à faible rapport signal-bruit (SNR). Les auteurs de cet article proposent un cadre audio-visuel non supervisé basé sur un auto-encodeur variationnel récurrent (AV-RVAE), qui intègre des indices visuels (mouvements des lèvres) pour complémenter l'audio. Ils étendent l'inférence postérieure avec des méthodes d'échantillonnage avancées pour mieux capturer les distributions latentes complexes, surpassant les approches déterministes comme MAP-EM. 
+   Cet article n'a pas une utilité directe dans le cadre de ce projet, en revanche, il apporte malgré tout des informations intéressantes en matière de traitement du bruit et d'extraction d'audios.
+
+
 ## Premiers pas
 
 ### Comment démarrer le projet
