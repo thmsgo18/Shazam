@@ -6,6 +6,9 @@ We have the available embedding functions
 and the function that will be called each time, which will choose the embedding function to apply based on the selected function.
 """
 
+import time
+from typing import List
+
 import numpy as np
 import librosa
 
@@ -75,7 +78,8 @@ def _load_clap(model_name: str, device: str | None = None):
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
     processor = ClapProcessor.from_pretrained(model_name)       # Load the CLAP processor.
-    model = ClapModel.from_pretrained(model_name, use_safetensors=True).to(device)    # Load the pretrained CLAP model.
+    # Do not force safetensors: some checkpoints only expose PyTorch weights.
+    model = ClapModel.from_pretrained(model_name).to(device)    # Load the pretrained CLAP model.
     model.eval()                                                # Set the model to evaluation mode.
 
     # Store loaded objects in cache for faster reuse in future calls :
@@ -104,7 +108,15 @@ def clap_embedding(waveform: np.ndarray, sr: int, model_name: str, normalize: bo
 
     model, processor, device = _load_clap(model_name=model_name) # Load or retrieve from cache the information of the CLAP.
 
-    inputs = processor(audios=waveform, sampling_rate=sr, return_tensors="pt") # Convert raw waveform into model-ready tensors with the CLAP processor.
+    # CLAP checkpoints are trained for a fixed sampling rate (usually 48 kHz).
+    # Resample the input on the fly so CLAP can process project audio loaded at another rate.
+    waveform = np.asarray(waveform, dtype=np.float32)
+    target_sr = int(getattr(processor.feature_extractor, "sampling_rate", sr))
+    if sr != target_sr:
+        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=target_sr)
+        sr = target_sr
+
+    inputs = processor(audios=[waveform], sampling_rate=sr, return_tensors="pt") # Convert raw waveform into model-ready tensors with the CLAP processor.
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad(): # Disable gradient computation for faster inference and lower memory usage
@@ -157,15 +169,9 @@ def muq_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int
     """
     import torch
 
-    # Handle empty input
+    # Handle empty input (dim 1024 fixe pour MuQ-large)
     if waveform is None or len(waveform) == 0:
-        # If possible, return correct dim based on model config; else fallback to 0-len safe vector
-        try:
-            model, _device = _load_muq(model_name=model_name)
-            h = int(getattr(model.config, "hidden_size", 0)) or 0
-            return np.zeros((h,), dtype=np.float32) if h > 0 else np.zeros((1,), dtype=np.float32)
-        except Exception:
-            return np.zeros((1,), dtype=np.float32)
+        return np.zeros((1024,), dtype=np.float32)
 
     # Ensure float32
     y = np.asarray(waveform, dtype=np.float32)
@@ -198,8 +204,6 @@ def muq_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int
 
     return emb
 
-from typing import List, Tuple
-
 def muq_batch_embeddings(
     segments: List[np.ndarray],
     sr: int,
@@ -214,7 +218,6 @@ def muq_batch_embeddings(
     Returns:
         emb: (B, H) float32
     """
-    import time
     t_rs = time.time()
     import torch
 
@@ -292,7 +295,8 @@ def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model
     Args:
         waveform (np.ndarray): Input audio waveform as a 1D NumPy array.
         sr (int): Sampling rate of the audio signal.
-        method (str, optional): Embedding method to use ("mfcc" or "clap"). Default is "mfcc".
+        method (str, optional): Embedding method to use ("mfcc", "clap" or "muq"). Default is "mfcc".
+        muq_model_name (str | None, optional): Name or path of the pretrained MuQ model. Required if method is "muq".
         clap_model_name (str | None, optional): Name or path of the pretrained CLAP model. Required if method is "clap".
 
     Returns:

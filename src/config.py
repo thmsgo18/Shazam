@@ -27,8 +27,10 @@ VECTOR_TOP_K_SEGMENTS = 200
 VECTOR_TOP_N_TRACKS = 20
 
 # Embedding
-EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" "muq"
+EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" ou "muq"
 CLAP_MODEL_NAME = "laion/clap-htsat-unfused"
+CLAP_SAMPLE_RATE = 48000
 
-MUQ_SAMPLE_RATE = 24000.
+MUQ_SAMPLE_RATE = 24000
 MUQ_MODEL_NAME = "OpenMuQ/MuQ-large-msd-iter"
+MUQ_BATCH_SIZE = 8

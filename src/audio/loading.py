@@ -10,6 +10,6 @@ import numpy as np
 import librosa
 from src.config import SAMPLE_RATE
 
-def load_audio(path: str, target_sr: int = SAMPLE_RATE, mono: bool = True) -> tuple[list, int]:
+def load_audio(path: str, target_sr: int = SAMPLE_RATE, mono: bool = True) -> tuple[np.ndarray, int]:
     waveform, sr = librosa.load(path, sr=target_sr, mono=mono)
     return waveform, sr

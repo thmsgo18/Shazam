@@ -16,29 +16,32 @@ import pandas as pd
 
 RAW_DIR = Path("data/raw")
 
-rows=[]
 
-def generate_track_id(path: str) -> str:
-    return hashlib.md5(path.encode()).hexdigest()
+def generate_track_id(path: Path) -> str:
+    """Identifiant stable basé sur le contenu du fichier (premiers 8 Ko)."""
+    with open(path, "rb") as f:
+        return hashlib.md5(f.read(8192)).hexdigest()
 
 
-for audio_file in RAW_DIR.rglob("*"): # Loop over all audio files in the folder data/raw/.
-    # Skip files that are not supported :
-    if audio_file.suffix.lower() not in {".wav", ".mp3", ".flac"}: 
-        continue
+if __name__ == "__main__":
+    rows = []
 
-    path = audio_file.relative_to(Path("."))
-    track_id = generate_track_id(str(path))
-    duration = librosa.get_duration(path= audio_file)
+    for audio_file in RAW_DIR.rglob("*"): # Loop over all audio files in the folder data/raw/.
+        # Skip files that are not supported :
+        if audio_file.suffix.lower() not in {".wav", ".mp3", ".flac"}:
+            continue
 
-    # Append metadata row to list :
-    rows.append({
-        "track_id": track_id,
-        "path": str(path),
-        "duration": duration
-    })
+        track_id = generate_track_id(audio_file)
+        duration = librosa.get_duration(path=audio_file)
 
-df = pd.DataFrame(rows) # Convert collected rows into a pandas DataFrame.
+        # Append metadata row to list :
+        rows.append({
+            "track_id": track_id,
+            "path": str(audio_file),
+            "duration": duration
+        })
 
-Path("data/processed").mkdir(parents=True, exist_ok=True)   # Test if the output directory exists.
-df.to_parquet("data/processed/metadata.parquet", index=False)       # Save metadata to parquet file.
+    df = pd.DataFrame(rows) # Convert collected rows into a pandas DataFrame.
+
+    Path("data/processed").mkdir(parents=True, exist_ok=True)   # Test if the output directory exists.
+    df.to_parquet("data/processed/metadata.parquet", index=False)       # Save metadata to parquet file.
