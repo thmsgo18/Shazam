@@ -101,3 +101,9 @@ if __name__ == "__main__":
     save_index(index, out_path)
 
     print(f"[build_index] Index sauvegardé → {out_path}")
+
+    # On vérifie que index.ntotal est égal au nb de ligne du .parquet
+    check_index = load_index(out_path)
+    print(f"Total number of vectors in the index : {check_index.ntotal}")
+    assert check_index.ntotal == len(segments)
+    print("Verification completed.")
