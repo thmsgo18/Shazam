@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import time
 import torch
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config
 from src.audio.loading import load_audio
