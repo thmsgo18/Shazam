@@ -27,7 +27,16 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     Raises:
         FileNotFoundError: si l'index n'existe pas (build_index.py non lancé).
     """
-    ...
+    index_path = Path(f"data/index/index_{method}.faiss")
+    seg_path = Path(f"data/features/segments_{method}.parquet")
+
+    if not index_path.exists():
+        raise FileNotFoundError(f"Index introuvable : {index_path}. Lance build_index.py d'abord.")
+
+    index = faiss.read_index(str(index_path))
+    segments = pd.read_parquet(str(seg_path))
+
+    return (index, segments)
 
 
 def search_segments(
@@ -47,7 +56,10 @@ def search_segments(
         Tuple (distances, indices) de shape (k,).
         Attention : FAISS retourne -1 dans indices si pas assez de voisins.
     """
-    ...
+    xq = query_embedding.astype("float32").reshape(1,-1)    # FAISS attend un tableau 2D (1, D) en float32
+    faiss.normalize_L2(x= xq)                               # Même normalisation qu'à l'indexation
+    distances, indices = index.search(x= xq, k= k)          # Recherche des k voisins
+    return distances[0], indices[0]                         # [0] pour enlever le coté batch
 
 
 def aggregate_by_track(
@@ -69,4 +81,12 @@ def aggregate_by_track(
     Returns:
         Liste triée [(track_id, score_total), ...] du meilleur au moins bon.
     """
-    ...
+    scores = {}
+    for idx, dist in zip(indices, distances):
+        if idx == -1 :
+            continue
+        track_id = segments.iloc[idx]["track_id"]
+        scores[track_id]= scores.get(track_id, 0.0) + float(dist)
+        
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
