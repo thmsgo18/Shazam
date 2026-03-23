@@ -13,6 +13,8 @@ import faiss
 import numpy as np
 import pandas as pd
 
+import src.config as config
+
 
 def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     """
@@ -27,8 +29,8 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     Raises:
         FileNotFoundError: si l'index n'existe pas (build_index.py non lancé).
     """
-    index_path = Path(f"data/index/index_{method}.faiss")
-    seg_path = Path(f"data/features/segments_{method}.parquet")
+    index_path = Path(f"{config.INDEX_DIR}/index_{method}.faiss")
+    seg_path = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
 
     if not index_path.exists():
         raise FileNotFoundError(f"Index introuvable : {index_path}. Lance build_index.py d'abord.")
@@ -82,11 +84,11 @@ def aggregate_by_track(
         Liste triée [(track_id, score_total), ...] du meilleur au moins bon.
     """
     scores = {}
-    for idx, dist in zip(indices, distances):
+    for idx, dist in zip(indices, distances):                       # zip permet d'assembler par paire
         if idx == -1 :
             continue
-        track_id = segments.iloc[idx]["track_id"]
-        scores[track_id]= scores.get(track_id, 0.0) + float(dist)
-        
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        track_id = segments.iloc[idx]["track_id"]                   # Permet d'acceder à une ligne de dataframe donné par idx
+        scores[track_id]= scores.get(track_id, 0.0) + float(dist)   # Calcule de l'accumulation du score. score élévé chanson très proche.
+
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True) # Retourne une liste de tuple trié par ordre décroissant.
 

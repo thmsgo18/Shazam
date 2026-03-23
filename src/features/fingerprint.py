@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import librosa
 from scipy.ndimage import maximum_filter
+import src.config as config
 
 
 def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
@@ -30,16 +31,13 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
         Ensemble de tuples (freq1, freq2, delta_t) représentant le fingerprint.
     """
     # 1. Calcul du spectrogramme
-    n_fft = 2048
-    hop_length = 512
-    stft = librosa.stft(waveform, n_fft=n_fft, hop_length=hop_length)
+    stft = librosa.stft(waveform, n_fft=config.FP_N_FFT, hop_length=config.FP_HOP_LENGTH)
     spectrogram = np.abs(stft)
 
     # 2. Détection des pics locaux
-    neighborhood = (20, 15) 
-    local_max = (maximum_filter(spectrogram, size=neighborhood) == spectrogram)
+    local_max = (maximum_filter(spectrogram, size=config.FP_NEIGHBORHOOD) == spectrogram)
 
-    threshold = np.percentile(spectrogram, 80)
+    threshold = np.percentile(spectrogram, config.FP_THRESHOLD_PERCENTILE)
     peaks_mask = local_max & (spectrogram > threshold)
 
     freq_bins, time_frames = np.where(peaks_mask)
@@ -47,9 +45,6 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
 
     # 3. Génération des hashes combinatoires
     hashes = set()
-    fan_out = 5 # nb max de paires par pic
-    min_delta_t = 3 # ignorer les paires trop proches (en frames)
-    max_delta_t = 50 # borne max de la target zone (en frames)
 
     for i, (t1, f1) in enumerate(peaks):
         connections = 0
@@ -60,15 +55,15 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
         while j < len(peaks) - i and not target_reached and not out_of_zone:
             t2, f2 = peaks[i + j]
             delta_t = t2 - t1
-            
+
             # si le pic est dans la zone visée
-            if min_delta_t <= delta_t <= max_delta_t:
+            if config.FP_MIN_DELTA_T <= delta_t <= config.FP_MAX_DELTA_T:
                 hashes.add((int(f1), int(f2), int(delta_t)))
                 connections += 1
-                if connections >= fan_out:
+                if connections >= config.FP_FAN_OUT:
                     target_reached = True
-            
-            elif delta_t > max_delta_t:
+
+            elif delta_t > config.FP_MAX_DELTA_T:
                 out_of_zone = True
 
             j += 1

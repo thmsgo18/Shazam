@@ -78,9 +78,9 @@ if __name__ == "__main__":
     import src.config as config
 
     method    = config.EMBEDDING_METHOD
-    emb_path  = Path(f"data/features/embeddings_{method}.npy")
-    seg_path  = Path(f"data/features/segments_{method}.parquet")
-    out_path  = Path(f"data/index/index_{method}.faiss")
+    emb_path  = Path(f"{config.FEATURES_DIR}/embeddings_{method}.npy")
+    seg_path  = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
+    out_path  = Path(f"{config.INDEX_DIR}/index_{method}.faiss")
 
     if not emb_path.exists() or not seg_path.exists() : 
         print(f"Error : the files for {method} are not found.")
