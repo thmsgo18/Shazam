@@ -2,6 +2,7 @@
 src/index/build_index.py
 
 Construction et gestion de l'index FAISS.
+Supporte aussi HNSW et IVF.
 Responsable : Personne A
 """
 
@@ -14,16 +15,17 @@ import numpy as np
 import pandas as pd
 
 
-def build_index(embeddings: np.ndarray) -> faiss.Index:
+def build_index(embeddings: np.ndarray, index_type: str = "flat") -> faiss.Index:
     """
-    Construit un index FAISS à partir d'une matrice d'embeddings.
+    Construit un index FAISS, selon le type choisi, à partir d'une matrice d'embeddings.
 
     Args:
         embeddings: matrice de shape (N, D) en float32.
                     Les vecteurs doivent être normalisés en L2.
+        index_type: "flat", "hnsw" ou "ivf"
 
     Returns:
-        Index FAISS prêt à la recherche.
+        Index FAISS prêt à la recherche (normalisé L2, similarité cosinus).
     """
     
     xb = embeddings.astype("float32") # Conversion en float32 pour FAISS
@@ -33,7 +35,23 @@ def build_index(embeddings: np.ndarray) -> faiss.Index:
 
     # On crée l'index FlatIP
     d = xb.shape[1] # Dim de l'embedding, permet de changer de méthode sans problèmes de dim.
-    index = faiss.IndexFlatIP(d)
+    N = len(xb)
+
+    index_type = index_type.lower()
+
+    if index_type == "flat" : 
+        index = faiss.IndexFlatIP(d)
+    elif index_type == "hnsw" : 
+        M = 32 # M : connectivité des graphes
+        index = faiss.IndexHNSWFlat(d, M)
+        index.hnsw.efConstruction = 40 # tuning pour la précision
+    elif index_type == "ivf" :
+        nbList = max(1, int(np.sqrt(N))) # Nb de listes inversées : racine carrée du nb de vecteurs
+        quantizer = faiss.IndexFlatIP(d)
+        index = faiss.IndexIVFFlat(quantizer, d, nbList, faiss.METRIC_INNER_PRODUCT)
+        index.train(xb)
+    else : 
+        raise ValueError(f"Index type unknwon : {index_type}. Possible choices : falt, hnsw, ivf") 
 
     # Ajout des vecteurs
     index.add(xb)
@@ -78,9 +96,10 @@ if __name__ == "__main__":
     import src.config as config
 
     method    = config.EMBEDDING_METHOD
+    index_type = getattr(config, "INDEX_TYPE", "flat") # Default value if forgotten
     emb_path  = Path(f"{config.FEATURES_DIR}/embeddings_{method}.npy")
     seg_path  = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
-    out_path  = Path(f"{config.INDEX_DIR}/index_{method}.faiss")
+    out_path  = Path(f"{config.INDEX_DIR}/index_{method}_{index_type}.faiss")
 
     if not emb_path.exists() or not seg_path.exists() : 
         print(f"Error : the files for {method} are not found.")
@@ -94,9 +113,10 @@ if __name__ == "__main__":
         f"Mismatch : {len(embeddings)} embeddings vs {len(segments)} segments"
     )
 
+    print(f"[build_index] Méthode embedding = {method} | Index type = {index_type}")
     print(f"[build_index] {len(embeddings)} vecteurs, dim={embeddings.shape[1]}")
 
-    index = build_index(embeddings)
+    index = build_index(embeddings, index_type=index_type)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     save_index(index, out_path)
 
