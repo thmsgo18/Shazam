@@ -8,10 +8,21 @@ Responsable : Personne C
 
 from __future__ import annotations
 
+import os
+
+# Active le fallback CPU pour les opérations non supportées sur MPS (Apple Silicon).
+# Sans effet sur les autres machines (CUDA, CPU).
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+import torch
+torch.set_num_threads(4)
+
+from concurrent.futures import ThreadPoolExecutor
+
 import src.config as config
 from src.audio.loading import load_audio
 from src.audio.preprocessing import iter_segments
-from src.features.embeddings_audio import embed_segment
+from src.features.embeddings_audio import embed_segment, muq_batch_embeddings, clap_embedding, mfcc_stats_embedding
 from src.retrieval.searcher import load_searcher, search_segments, aggregate_by_track
 from src.features.fingerprint import extract_fingerprint, fingerprint_similarity
 
@@ -66,20 +77,32 @@ def identify_track(
 
     waveform, sr = load_audio(path= audio_path, target_sr= targ_sr) # Chargement de l'audio.
 
-    all_results = [] # Stockage des résultats FAISS pour chaque segment.
-    for _, segment in iter_segments(waveform= waveform, sr= sr): # Découpage de l'audio.
-        embedding = embed_segment(
-            waveform= segment,
-            sr= sr,
-            method= method,
-            clap_model_name=config.CLAP_MODEL_NAME,
-            muq_model_name=config.MUQ_MODEL_NAME
-            )
-        
-        # K voisins avec FAISS :
-        distances, indices = search_segments(index= index, query_embedding= embedding, k= config.VECTOR_TOP_K_SEGMENTS)
+    # Découpage de l'audio en segments
+    segment_list = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
 
-        all_results.append((distances, indices)) # Ajout du résultat du segment dans la liste des scores.
+    all_results = [] # Stockage des résultats FAISS pour chaque segment.
+
+    if config.OPT_BATCH_EMBED and method == "muq":
+        # Batch embedding : traitement par groupes de MUQ_BATCH_SIZE segments
+        batch_size = config.MUQ_BATCH_SIZE
+        for i in range(0, len(segment_list), batch_size):
+            batch = segment_list[i:i + batch_size]
+            embeddings = muq_batch_embeddings(batch, sr, model_name=config.MUQ_MODEL_NAME)
+            for embedding in embeddings:
+                distances, indices = search_segments(index=index, query_embedding=embedding, k=config.VECTOR_TOP_K_SEGMENTS)
+                all_results.append((distances, indices))
+    else:
+        # Embedding segment par segment (comportement de base)
+        for segment in segment_list:
+            embedding = embed_segment(
+                waveform=segment,
+                sr=sr,
+                method=method,
+                clap_model_name=config.CLAP_MODEL_NAME,
+                muq_model_name=config.MUQ_MODEL_NAME
+            )
+            distances, indices = search_segments(index=index, query_embedding=embedding, k=config.VECTOR_TOP_K_SEGMENTS)
+            all_results.append((distances, indices))
     
     global_scores = {} # Dictionnaire global : track_id → score cumulé sur tous les segments.
 
@@ -93,20 +116,29 @@ def identify_track(
 
     # ---------- Stage 2 (Fingerprinting) : ----------
 
+    # Court-circuit : si le 1er candidat est très largement devant, inutile de faire le fingerprinting
+    if config.OPT_SHORTCIRCUIT and len(candidates) >= 2:
+        if candidates[1][1] > 0 and candidates[0][1] / candidates[1][1] >= config.OPT_SHORTCIRCUIT_RATIO:
+            return [(track_id, score) for track_id, score in candidates[:top_n]]
 
     query_fp = extract_fingerprint(waveform, sr) # Extraction du fingerprint de l'audio recherché.
 
-    final_scores = [] # Scores finaux combiné (FAISS + fingerprinting)
-    
-    for track_id, score_faiss in candidates: # Boucle sur les candidats de FAISS.
-        path = segments[segments["track_id"]== track_id].iloc[0]["path"]        # Récupération du chemin de l'audio candidat.
+    def process_candidate(candidate):
+        """Charge l'audio et calcule le fingerprint d'un candidat."""
+        track_id, score_faiss = candidate
+        path = segments[segments["track_id"] == track_id].iloc[0]["path"]
+        candidate_waveform, candidate_sr = load_audio(path, target_sr=targ_sr)
+        candidate_fp = extract_fingerprint(candidate_waveform, candidate_sr)
+        score_fp = fingerprint_similarity(query_fp, candidate_fp)
+        return (track_id, score_faiss * score_fp)
 
-        candidate_waveform, candidate_sr = load_audio(path, target_sr=targ_sr)  # Chargement de l'audio candidat.
-        candidate_fp = extract_fingerprint(candidate_waveform, candidate_sr)    # Extraction du fingerprinting de l'audio candidat.
-
-        score_fp = fingerprint_similarity(query_fp, candidate_fp)               # Calcule du score de similarité avec la méthode de fingerprint.
-        score_final = score_faiss * score_fp                                    # Calcule du score avec FAISS et fingerprint.
-        final_scores.append((track_id, score_final))
+    if config.OPT_FINGERPRINT_PARALLEL:
+        # Chargement et fingerprinting des candidats en parallèle
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            final_scores = list(executor.map(process_candidate, candidates))
+    else:
+        # Traitement séquentiel (comportement de base)
+        final_scores = [process_candidate(c) for c in candidates]
 
     return sorted(final_scores, key=lambda x: x[1], reverse=True)[:top_n] # Retourner les top_n meilleurs morceaux.
 

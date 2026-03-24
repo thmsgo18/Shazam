@@ -75,11 +75,24 @@ def _load_clap(model_name: str, device: str | None = None):
         return _CLAP_CACHE["model"], _CLAP_CACHE["processor"], _CLAP_CACHE["device"]
 
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"   # GPU Apple Silicon (M1/M2/M3)
+        else:
+            device = "cpu"
 
+    # Sur Apple Silicon (MPS), certaines opérations CLAP ne sont pas supportées nativement.
+    # On active le fallback CPU automatiquement pour que ça fonctionne sur toutes les machines.
+    if device == "mps":
+        import os
+        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+    import src.config as config
     processor = ClapProcessor.from_pretrained(model_name)       # Load the CLAP processor.
-    # Do not force safetensors: some checkpoints only expose PyTorch weights.
-    model = ClapModel.from_pretrained(model_name).to(device)    # Load the pretrained CLAP model.
+    # Float16 uniquement sur CUDA — sur CPU/MPS beaucoup d'opérations ne supportent pas Half
+    dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
+    model = ClapModel.from_pretrained(model_name, torch_dtype=dtype).to(device)
     model.eval()                                                # Set the model to evaluation mode.
 
     # Store loaded objects in cache for faster reuse in future calls :
@@ -148,9 +161,15 @@ def _load_muq(model_name: str, device: str | None = None):
         return _MUQ_CACHE["model"], _MUQ_CACHE["device"]
 
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"  # MPS ne supporte pas ComplexFloat (requis par MuQ)
 
-    model = MuQ.from_pretrained(model_name).to(device)
+    import src.config as config
+    # Float16 uniquement sur CUDA — sur CPU LayerNorm ne supporte pas Half
+    dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
+    model = MuQ.from_pretrained(model_name).to(dtype).to(device)
     model.eval()
 
     _MUQ_CACHE.update({"model": model, "device": device, "model_name": model_name})
@@ -257,7 +276,9 @@ def muq_batch_embeddings(
     # Load model (cached) and run forward
     model, device = _load_muq(model_name=model_name)
 
-    x_t = torch.from_numpy(x).to(device)
+    # Caster l'entrée au même type que le modèle (float16 ou float32)
+    model_dtype = next(model.parameters()).dtype
+    x_t = torch.from_numpy(x).to(device).to(model_dtype)
     attn_t = torch.from_numpy(attn).to(device)
 
     with torch.no_grad():
