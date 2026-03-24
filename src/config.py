@@ -50,7 +50,7 @@ VECTOR_TOP_N_RESULTS  = 5
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "muq"   # "mfcc" ou "clap" ou "muq"
+EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" ou "muq"
 CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 

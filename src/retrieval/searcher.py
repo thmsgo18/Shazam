@@ -29,7 +29,8 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     Raises:
         FileNotFoundError: si l'index n'existe pas (build_index.py non lancé).
     """
-    index_path = Path(f"{config.INDEX_DIR}/index_{method}.faiss")
+    index_type = config.INDEX_TYPE
+    index_path = Path(f"{config.INDEX_DIR}/index_{method}_{index_type}.faiss")
     seg_path = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
 
     if not index_path.exists():
