@@ -1,124 +1,126 @@
 """
 scripts/download_music.py
 
-But : lire le CSV Kaggle Spotify, faire le matching YouTube, telecharger les MP3,
-      puis lancer automatiquement le pipeline de build et verifier les chiffres.
+But : lire un ou plusieurs CSV Kaggle Spotify, faire le matching YouTube,
+      télécharger l'audio en RAM, calculer embeddings + fingerprints,
+      et construire l'index FAISS. Aucun MP3 n'est stocké sur disque.
 
-Etapes :
-    1. Lire le CSV Kaggle  -> extraire titre + artiste
-    2. yt-dlp              -> recherche YouTube + telechargement MP3 (sans API YouTube)
-    3. build_metadata.py   -> construction des metadonnees
-    4. build_segment_embeddings.py -> calcul des embeddings
-    5. build_index.py      -> construction de l'index FAISS
-    6. Verification        -> coherence des chiffres entre chaque etape
+Prérequis :
+    pip install pandas yt-dlp rich
+    brew install ffmpeg
 
-Prerequis :
-    pip install pandas yt-dlp
-    brew install ffmpeg   
-
-Telechargement du CSV Kaggle :
+Téléchargement du CSV Kaggle :
     pip install kaggle
     kaggle datasets download -d anxods/spotify-top-50-playlist-songs-anxods
     unzip spotify-top-50-playlist-songs-anxods.zip -d data/kaggle/
 
 Usage :
-    python scripts/download_music.py --csv data/kaggle/mon_fichier.csv --n 50 
-    #Remplacez mon_fichier.csv par le top50 de votre choix
+    # Un seul CSV
+    python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv --n 50
+
+    # Dossier entier (tous les CSV fusionnés)
+    python scripts/download_music.py --csv data/kaggle/data/ --n 50
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+import pickle
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import click
+import librosa
+import numpy as np
 import pandas as pd
+import torch
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn, MofNCompleteColumn, Progress,
+    SpinnerColumn, TextColumn, TimeElapsedColumn
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-RAW_DIR = Path("data/raw")
+from src import config
+from src.audio.preprocessing import iter_segments
+from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
+from src.features.fingerprint import extract_fingerprint
 
-# Noms de colonnes possibles selon la version du dataset
+RAW_DIR = Path("data/raw")
+FEATURES_DIR = Path("data/features")
+PROCESSED_DIR = Path("data/processed")
+
 POSSIBLE_TITLE_COLS  = ["track_name", "name", "title", "song", "track"]
 POSSIBLE_ARTIST_COLS = ["artist_name", "artists", "artist", "performer", "track_artist"]
 
+console = Console()
+
 
 # ===========================================================================
-# ETAPE 1 — CSV KAGGLE : lire les metadonnees Spotify
+# CSV — lecture des métadonnées Spotify
 # ===========================================================================
 
 def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Retourne le premier nom de colonne present dans le DataFrame."""
     for col in candidates:
         if col in df.columns:
             return col
     return None
 
 
-def load_tracks_from_csv(csv_path: Path, n: int) -> list[dict]:
-    """
-    Lit le CSV Kaggle et extrait les n premiers titres uniques.
-    Retourne une liste de dicts avec : title, artist.
-    """
-    print(f"Lecture du CSV : {csv_path}")
+def get_csv_files(csv_path: str) -> list[Path]:
+    """Retourne la liste des CSV à traiter (fichier unique ou tous les CSV d'un dossier)."""
+    p = Path(csv_path)
+    if p.is_dir():
+        csvs = sorted(p.glob("*.csv"))
+        if not csvs:
+            console.print(f"[red]Aucun fichier CSV trouvé dans {p}[/red]")
+            sys.exit(1)
+        return csvs
+    if not p.exists():
+        console.print(f"[red]Fichier introuvable : {p}[/red]")
+        sys.exit(1)
+    return [p]
+
+
+def load_tracks_from_csv(csv_path: Path) -> list[dict]:
+    """Lit un CSV Kaggle et retourne tous les titres uniques."""
     df = pd.read_csv(csv_path)
-
-    print(f"  {len(df)} lignes trouvees. Colonnes : {list(df.columns)}")
-
-    # Trouver les bonnes colonnes automatiquement
     title_col  = find_column(df, POSSIBLE_TITLE_COLS)
     artist_col = find_column(df, POSSIBLE_ARTIST_COLS)
 
-    if title_col is None:
-        print(f"  Colonne titre introuvable. Colonnes disponibles : {list(df.columns)}")
-        print(f"  Modifie POSSIBLE_TITLE_COLS dans le script.")
-        sys.exit(1)
+    if title_col is None or artist_col is None:
+        console.print(f"[red]Colonnes titre/artiste introuvables dans {csv_path}[/red]")
+        return []
 
-    if artist_col is None:
-        print(f"  Colonne artiste introuvable. Colonnes disponibles : {list(df.columns)}")
-        print(f"  Modifie POSSIBLE_ARTIST_COLS dans le script.")
-        sys.exit(1)
-
-    print(f"  Colonnes detectees -> titre : '{title_col}', artiste : '{artist_col}'")
-
-    # Nettoyer les lignes vides et doublons
-    df = df[[title_col, artist_col]].dropna()
-    df = df.drop_duplicates(subset=[title_col, artist_col])
-
-    # Trier par popularite si la colonne existe
-    if "popularity" in df.columns:
-        df = df.sort_values("popularity", ascending=False)
+    df = df[[title_col, artist_col]].dropna().drop_duplicates(subset=[title_col, artist_col])
 
     tracks = []
-    for row in df.head(n).itertuples(index=False):
+    for row in df.itertuples(index=False):
         title  = str(getattr(row, title_col)).strip()
         artist = str(getattr(row, artist_col)).strip()
-
-        # Certains datasets mettent plusieurs artistes entre crochets ex: "['Artist1', 'Artist2']"
-        # On garde uniquement le premier
         if artist.startswith("["):
             artist = re.sub(r"[\[\]'\"]", "", artist).split(",")[0].strip()
+        tracks.append({"title": title, "artist": artist, "source": csv_path.name})
 
-        tracks.append({"title": title, "artist": artist})
-
-    print(f"{len(tracks)} titres charges depuis le CSV.\n")
     return tracks
 
 
 # ===========================================================================
-# ETAPE 2 — yt-dlp : recherche YouTube + telechargement MP3 (sans API YouTube)
+# Téléchargement
 # ===========================================================================
 
-def download_audio_direct(artist: str, title: str, dest_dir: Path) -> bool:
-    """
-    Recherche et telecharge directement via yt-dlp sans API YouTube.
-    yt-dlp fait lui-meme la recherche YouTube avec ytsearch: — aucune cle requise.
-    Retourne True si succes.
-    """
-    # Nom de fichier propre sans caracteres speciaux
+def download_to_disk(artist: str, title: str, dest_dir: Path) -> bool:
+    """Télécharge le MP3 dans dest_dir (ancien comportement --store-audio)."""
     safe_name = "".join(
         c if c.isalnum() or c in "-_ " else "_"
         for c in f"{artist}_{title}"
@@ -126,199 +128,421 @@ def download_audio_direct(artist: str, title: str, dest_dir: Path) -> bool:
     filename  = f"{safe_name[:60]}.mp3"
     dest_path = dest_dir / filename
 
-    # Ne pas retelecharger si deja present
     if dest_path.exists():
-        print(f"  [skip] {filename} deja present")
         return True
 
-    # ytsearch1: prend le 1er resultat YouTube correspondant a la requete
     query = f"{artist} {title} official audio"
     cmd = [
-        "yt-dlp",
-        f"ytsearch1:{query}",        # recherche YouTube directe, sans API
-        "--extract-audio",           # extraire uniquement l'audio
-        "--audio-format", "mp3",     # format de sortie MP3
-        "--audio-quality", "5",      # qualite ~128kbps
+        "yt-dlp", f"ytsearch1:{query}",
+        "--extract-audio", "--audio-format", "mp3",
+        "--audio-quality", "5",
         "--output", str(dest_dir / f"{safe_name[:60]}.%(ext)s"),
-        "--quiet",
-        "--no-warnings",
-        "--socket-timeout", "30",
+        "--quiet", "--no-warnings", "--socket-timeout", "30",
     ]
-
     try:
         result = subprocess.run(cmd, timeout=120)
-        if result.returncode == 0:
-            print(f"  [ok]   {filename}")
-            return True
-        print(f"  [err]  {filename} (code : {result.returncode})")
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
-    except subprocess.TimeoutExpired:
-        print(f"  [err]  {filename} (timeout)")
-        return False
-    except FileNotFoundError:
-        print("  [err]  yt-dlp introuvable — installe-le avec : pip install yt-dlp")
-        sys.exit(1)
+
+
+def download_to_ram(artist: str, title: str, target_sr: int) -> tuple[np.ndarray, int] | tuple[None, None]:
+    """
+    Télécharge l'audio dans un dossier temporaire, le charge en RAM, puis supprime le fichier.
+    Aucun MP3 n'est conservé sur disque après l'appel.
+    """
+    query = f"{artist} {title} official audio"
+    cmd = [
+        "yt-dlp", f"ytsearch1:{query}",
+        "--extract-audio", "--audio-format", "mp3",
+        "--audio-quality", "5",
+        "--output", "%(id)s.%(ext)s",
+        "--quiet", "--no-warnings", "--socket-timeout", "30",
+    ]
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(cmd, timeout=120, cwd=tmpdir)
+            if result.returncode != 0:
+                return None, None
+
+            files = list(Path(tmpdir).glob("*.mp3"))
+            if not files:
+                return None, None
+
+            waveform, sr = librosa.load(str(files[0]), sr=target_sr, mono=True)
+            return waveform, sr
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        return None, None
 
 
 # ===========================================================================
-# ETAPES 3/4/5 — pipeline de build
+# Pipeline RAM — traitement sans stockage MP3
+# ===========================================================================
+
+def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
+    """
+    Pour chaque morceau : télécharge en RAM, calcule embeddings + fingerprint,
+    sauvegarde embeddings.npy / segments.parquet / fingerprints.pkl / metadata.parquet.
+    Aucun MP3 n'est écrit dans data/raw/.
+    """
+    torch.set_num_threads(4)
+
+    method     = config.EMBEDDING_METHOD
+    batch_size = config.MUQ_BATCH_SIZE
+
+    if method == "clap":
+        load_sr = config.CLAP_SAMPLE_RATE
+    elif method == "muq":
+        load_sr = config.MUQ_SAMPLE_RATE
+    else:
+        load_sr = config.SAMPLE_RATE
+
+    win_s   = config.SEGMENT_WIN_S
+    hop_s   = config.SEGMENT_HOP_S
+    min_win = config.SEGMENT_MIN_WIN
+
+    # Sauvegarder la source pour l'affichage dans build_segment_embeddings.py
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+    (PROCESSED_DIR / "source.txt").write_text(", ".join(csv_sources))
+
+    console.print(Panel(
+        f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
+        f"[bold]Méthode  :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Tracks   :[/bold] {len(tracks)}\n"
+        f"[bold]Mode     :[/bold] [green]RAM (aucun MP3 stocké)[/green]",
+        title="[bold cyan]Download + Build Pipeline[/bold cyan]",
+        expand=False
+    ))
+
+    segments_rows   = []
+    embeddings_list = []
+    fingerprints    = {}
+    metadata_rows   = []
+    segment_id      = 0
+
+    batch_segments  = []
+    batch_meta      = []
+
+    progress_columns = [
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+    ]
+
+    with Progress(*progress_columns, console=console) as progress:
+        dataset_task = (
+            progress.add_task("[cyan]Tracks", total=len(tracks))
+            if config.PROGRESS_DATASET else None
+        )
+
+        for track in tracks:
+            artist = track["artist"]
+            title  = track["title"]
+            label  = f"{artist} — {title}"
+
+            # Téléchargement en RAM
+            waveform, sr = download_to_ram(artist, title, load_sr)
+
+            if waveform is None:
+                console.print(f"[red]  ✗ Échec : {label}[/red]")
+                if dataset_task is not None:
+                    progress.advance(dataset_task)
+                continue
+
+            # track_id stable basé sur le contenu audio
+            track_id = hashlib.md5(waveform.tobytes()[:8192]).hexdigest()
+
+            metadata_rows.append({
+                "track_id": track_id,
+                "title":    title,
+                "artist":   artist,
+                "source":   track["source"],
+                "duration": len(waveform) / sr,
+            })
+
+            # Fingerprint (toujours à SAMPLE_RATE)
+            if sr != config.SAMPLE_RATE:
+                waveform_fp = librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+            else:
+                waveform_fp = waveform
+            fingerprints[track_id] = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+
+            # Segmentation
+            segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
+
+            track_task = (
+                progress.add_task(f"[green]{label[:50]}", total=len(segs))
+                if config.PROGRESS_TRACK else None
+            )
+
+            for start_s, seg in segs:
+                if method == "muq":
+                    batch_segments.append(seg)
+                    batch_meta.append((track_id, float(start_s)))
+
+                    if len(batch_segments) >= batch_size:
+                        embs = muq_batch_embeddings(
+                            batch_segments, sr=sr, model_name=config.MUQ_MODEL_NAME
+                        )
+                        for i in range(embs.shape[0]):
+                            embeddings_list.append(embs[i])
+                            t_id, st = batch_meta[i]
+                            segments_rows.append({
+                                "segment_id": segment_id,
+                                "track_id":   t_id,
+                                "start_s":    st
+                            })
+                            segment_id += 1
+                        batch_segments.clear()
+                        batch_meta.clear()
+                else:
+                    emb = embed_segment(
+                        seg, sr, method=method,
+                        clap_model_name=config.CLAP_MODEL_NAME,
+                        muq_model_name=config.MUQ_MODEL_NAME
+                    )
+                    embeddings_list.append(emb)
+                    segments_rows.append({
+                        "segment_id": segment_id,
+                        "track_id":   track_id,
+                        "start_s":    float(start_s)
+                    })
+                    segment_id += 1
+
+                if track_task is not None:
+                    progress.advance(track_task)
+
+            if track_task is not None:
+                progress.remove_task(track_task)
+            if dataset_task is not None:
+                progress.advance(dataset_task)
+
+            time.sleep(0.5)  # pause pour éviter le rate-limiting YouTube
+
+    # Flush dernier batch MuQ incomplet
+    if method == "muq" and len(batch_segments) > 0:
+        embs = muq_batch_embeddings(batch_segments, sr=load_sr, model_name=config.MUQ_MODEL_NAME)
+        for i in range(embs.shape[0]):
+            embeddings_list.append(embs[i])
+            t_id, st = batch_meta[i]
+            segments_rows.append({"segment_id": segment_id, "track_id": t_id, "start_s": st})
+            segment_id += 1
+
+    if not embeddings_list:
+        console.print("[red]Aucun morceau traité — pipeline annulé.[/red]")
+        sys.exit(1)
+
+    # Fusion avec les données existantes
+    emb_path = FEATURES_DIR / f"embeddings_{method}.npy"
+    seg_path = FEATURES_DIR / f"segments_{method}.parquet"
+    fp_path  = FEATURES_DIR / "fingerprints.pkl"
+    meta_path = PROCESSED_DIR / "metadata.parquet"
+
+    new_emb = np.vstack(embeddings_list).astype(np.float32)
+
+    if emb_path.exists():
+        existing_emb = np.load(emb_path)
+        # Décaler les segment_id pour éviter les collisions
+        offset = len(existing_emb)
+        for row in segments_rows:
+            row["segment_id"] += offset
+        emb_mat = np.vstack([existing_emb, new_emb]).astype(np.float32)
+    else:
+        emb_mat = new_emb
+
+    np.save(emb_path, emb_mat)
+
+    df_new_seg = pd.DataFrame(segments_rows)
+    if seg_path.exists():
+        df_existing_seg = pd.read_parquet(seg_path)
+        df_segments = pd.concat([df_existing_seg, df_new_seg], ignore_index=True)
+    else:
+        df_segments = df_new_seg
+    df_segments.to_parquet(seg_path, index=False)
+
+    existing_fp = {}
+    if fp_path.exists():
+        with open(fp_path, "rb") as f:
+            existing_fp = pickle.load(f)
+    existing_fp.update(fingerprints)
+    with open(fp_path, "wb") as f:
+        pickle.dump(existing_fp, f)
+
+    df_new_meta = pd.DataFrame(metadata_rows)
+    if meta_path.exists():
+        df_existing_meta = pd.read_parquet(meta_path)
+        df_meta = pd.concat([df_existing_meta, df_new_meta], ignore_index=True)
+    else:
+        df_meta = df_new_meta
+    df_meta.to_parquet(meta_path, index=False)
+
+    console.print(Panel(
+        f"[bold]Nouveaux tracks  :[/bold] {len(metadata_rows)}\n"
+        f"[bold]Total en base    :[/bold] {len(df_meta)}\n"
+        f"[bold]Total segments   :[/bold] {len(df_segments)}\n"
+        f"[bold]Embedding dim    :[/bold] {emb_mat.shape[1]}\n"
+        f"[bold]Fingerprints     :[/bold] {len(existing_fp)} tracks",
+        title="[bold green]Embeddings + Fingerprints — OK[/bold green]",
+        expand=False
+    ))
+
+    # Construction de l'index FAISS
+    run_step("Construction de l'index FAISS", [sys.executable, "src/index/build_index.py"])
+
+
+# ===========================================================================
+# Pipeline ancien — avec stockage MP3
 # ===========================================================================
 
 def run_step(label: str, cmd: list[str]) -> None:
-    """Lance une commande shell et arrete le script si elle echoue."""
-    print(f"\n{'─' * 50}")
-    print(f"[{label}]")
-    print(f"cmd : {' '.join(cmd)}")
-    print(f"{'─' * 50}")
+    console.print(f"\n[bold]▶ {label}[/bold]")
     result = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[1])
     if result.returncode != 0:
-        print(f"Echec a l'etape : {label} (code {result.returncode})")
+        console.print(f"[red]Échec : {label} (code {result.returncode})[/red]")
         sys.exit(result.returncode)
-    print(f"OK : {label}")
-
-
-# ===========================================================================
-# ETAPE 6 — verification des chiffres
-# ===========================================================================
-
-def verify_pipeline() -> None:
-    """
-    Verifie la coherence des chiffres entre chaque etape du pipeline.
-    Assure que rien n'a ete perdu entre les fichiers audio, les embeddings et l'index.
-
-    Ce qu'on verifie :
-        data/raw/          -> X fichiers audio
-        metadata.parquet   -> doit avoir X lignes
-        segments.parquet   -> Y segments (X morceaux x ~6 segments chacun)
-        embeddings.npy     -> doit avoir Y lignes
-        index.faiss        -> doit avoir Y vecteurs (index.ntotal == Y)
-    """
-    import numpy as np
-    import faiss
-    from src import config
-
-    method = config.EMBEDDING_METHOD
-    print(f"\n{'─' * 50}")
-    print(f"[VERIFICATION DES CHIFFRES] methode = {method}")
-    print(f"{'─' * 50}")
-
-    # Nombre de fichiers audio dans data/raw/
-    n_audio = sum(
-        1 for f in RAW_DIR.rglob("*")
-        if f.suffix.lower() in {".mp3", ".wav", ".flac"}
-    )
-    print(f"Fichiers audio dans data/raw/      : {n_audio}")
-
-    # Nombre de lignes dans metadata.parquet
-    meta_path = Path("data/processed/metadata.parquet")
-    if meta_path.exists():
-        n_meta = len(pd.read_parquet(meta_path))
-        status = "OK" if n_meta == n_audio else "ATTENTION : mismatch"
-        print(f"Lignes dans metadata.parquet       : {n_meta}  [{status}]")
-    else:
-        print(f"metadata.parquet                   : INTROUVABLE")
-        return
-
-    # Nombre de segments et d'embeddings
-    seg_path = Path(f"data/features/segments_{method}.parquet")
-    emb_path = Path(f"data/features/embeddings_{method}.npy")
-
-    if seg_path.exists() and emb_path.exists():
-        n_segments   = len(pd.read_parquet(seg_path))
-        n_embeddings = np.load(emb_path).shape[0]
-        status = "OK" if n_segments == n_embeddings else "ATTENTION : mismatch"
-        print(f"Segments dans segments.parquet     : {n_segments}")
-        print(f"Vecteurs dans embeddings.npy       : {n_embeddings}  [{status}]")
-    else:
-        print(f"segments/embeddings ({method})     : INTROUVABLES")
-        return
-
-    # Nombre de vecteurs dans l'index FAISS
-    index_path = Path(f"data/index/index_{method}.faiss")
-    if index_path.exists():
-        index  = faiss.read_index(str(index_path))
-        status = "OK" if index.ntotal == n_embeddings else "ATTENTION : mismatch"
-        print(f"Vecteurs dans index FAISS          : {index.ntotal}  [{status}]")
-    else:
-        print(f"index FAISS ({method})             : INTROUVABLE")
-
-    print(f"{'─' * 50}\n")
 
 
 # ===========================================================================
 # CLI
 # ===========================================================================
 
-@click.command()
-@click.option("--csv", "csv_path", default=None,
-              help="Chemin vers le CSV Kaggle (si non fourni, cherche dans data/kaggle/)")
-@click.option("--n", default=50, show_default=True, help="Nombre de morceaux a telecharger")
-def main(csv_path: str | None, n: int) -> None:
+KAGGLE_DATASET = "anxods/spotify-top-50-playlist-songs-anxods"
+KAGGLE_DIR     = Path("data/kaggle/data")
+
+
+def download_kaggle_csvs() -> None:
+    """Télécharge automatiquement les CSV Kaggle si pas déjà présents."""
+    if KAGGLE_DIR.exists() and list(KAGGLE_DIR.glob("*.csv")):
+        console.print(f"[green]CSV Kaggle déjà présents dans {KAGGLE_DIR}[/green]")
+        return
+
+    console.print(f"[bold]Téléchargement des CSV Kaggle...[/bold]")
+    KAGGLE_DIR.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", tmpdir, "--unzip"],
+            timeout=120
+        )
+        if result.returncode != 0:
+            console.print("[red]Échec du téléchargement Kaggle. Vérifie ta clé API kaggle.json.[/red]")
+            sys.exit(1)
+
+        # Copier uniquement les CSV dans KAGGLE_DIR
+        for csv_file in Path(tmpdir).rglob("*.csv"):
+            dest = KAGGLE_DIR / csv_file.name
+            dest.write_bytes(csv_file.read_bytes())
+            console.print(f"  [green]✓[/green] {csv_file.name}")
+
+    console.print(f"[green]CSV téléchargés dans {KAGGLE_DIR}[/green]\n")
+
+
+def load_already_processed(method: str) -> set[tuple[str, str]]:
     """
-    Lit le CSV Kaggle Spotify, telecharge les MP3 via yt-dlp,
-    puis lance le pipeline de build et verifie les chiffres.
+    Retourne l'ensemble des (artist, title) déjà traités POUR LA MÉTHODE DONNÉE.
+    Vérifie segments_{method}.parquet et non metadata.parquet — un morceau peut
+    être dans metadata sans avoir ses embeddings pour toutes les méthodes.
+    """
+    seg_path  = FEATURES_DIR / f"segments_{method}.parquet"
+    meta_path = PROCESSED_DIR / "metadata.parquet"
+
+    if not seg_path.exists() or not meta_path.exists():
+        return set()
+
+    # track_ids déjà indexés pour cette méthode
+    seg_ids = set(pd.read_parquet(seg_path)["track_id"].unique())
+
+    # Correspondance track_id → (artist, title) via metadata
+    df_meta = pd.read_parquet(meta_path)
+    if "artist" not in df_meta.columns or "title" not in df_meta.columns:
+        return set()
+
+    return {
+        (str(r.artist).lower(), str(r.title).lower())
+        for r in df_meta.itertuples()
+        if r.track_id in seg_ids
+    }
+
+
+@click.command()
+@click.option("--csv", "csv_paths", multiple=True,
+              help="Fichier CSV ou dossier. Répétable. Si absent, utilise tous les CSV Kaggle.")
+@click.option("--store-audio", is_flag=True, default=False,
+              help="Sauvegarder les MP3 dans data/raw/ (ancien comportement).")
+def main(csv_paths: tuple[str], store_audio: bool) -> None:
+    """
+    Lit un ou plusieurs CSV Kaggle Spotify, télécharge l'audio et construit la base.
+    Si --csv est absent, utilise automatiquement tous les CSV Kaggle disponibles.
+    Les morceaux déjà traités pour la méthode active sont automatiquement ignorés.
     """
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Trouver le CSV automatiquement si non fourni
-    if csv_path is None:
-        kaggle_dir = Path("data/kaggle")
-        csvs = list(kaggle_dir.glob("*.csv")) if kaggle_dir.exists() else []
-        if not csvs:
-            print("Aucun CSV trouve dans data/kaggle/")
-            print("Telecharge le dataset avec :")
-            print("  kaggle datasets download -d anxods/spotify-top-50-playlist-songs-anxods")
-            print("  unzip spotify-top-50-playlist-songs-anxods.zip -d data/kaggle/")
+    # Collecter les fichiers CSV
+    if not csv_paths:
+        download_kaggle_csvs()
+        csv_files = get_csv_files(str(KAGGLE_DIR))
+    else:
+        csv_files = []
+        for p in csv_paths:
+            csv_files.extend(get_csv_files(p))
+
+    console.print(f"[bold]{len(csv_files)} fichier(s) CSV détecté(s) :[/bold]")
+    for f in csv_files:
+        console.print(f"  • {f}")
+
+    # Charger les morceaux déjà traités POUR CETTE MÉTHODE pour les ignorer
+    method = config.EMBEDDING_METHOD
+    already_processed = load_already_processed(method)
+    if already_processed:
+        console.print(f"\n[yellow]{len(already_processed)} morceau(x) déjà traité(s) avec '{method}' → ignorés[/yellow]")
+
+    # Charger tous les tracks en dédupliquant et en filtrant les déjà traités
+    all_tracks = []
+    seen       = set()
+    skipped    = 0
+    for csv_file in csv_files:
+        for t in load_tracks_from_csv(csv_file):
+            key = (t["artist"].lower(), t["title"].lower())
+            if key in already_processed:
+                skipped += 1
+                continue
+            if key not in seen:
+                seen.add(key)
+                all_tracks.append(t)
+
+    if skipped > 0:
+        console.print(f"[yellow]{skipped} morceau(x) ignoré(s) (déjà dans la base)[/yellow]")
+
+    if not all_tracks:
+        console.print("[green]Tous les morceaux sont déjà dans la base. Rien à faire.[/green]")
+        sys.exit(0)
+
+    console.print(f"\n[bold]{len(all_tracks)} nouveaux morceaux à traiter.[/bold]\n")
+
+    csv_sources = [f.name for f in csv_files]
+
+    if store_audio:
+        success = 0
+        for i, track in enumerate(all_tracks, 1):
+            console.print(f"[{i}/{len(all_tracks)}] {track['artist']} — {track['title']}")
+            if download_to_disk(track["artist"], track["title"], RAW_DIR):
+                success += 1
+            time.sleep(1.0)
+
+        console.print(f"\n{success}/{len(all_tracks)} morceaux téléchargés dans {RAW_DIR}/")
+        if success == 0:
             sys.exit(1)
-        csv_path = str(csvs[0])
-        print(f"CSV detecte automatiquement : {csv_path}")
 
-    # --- Etape 1 : lire les metadonnees depuis le CSV ---
-    tracks = load_tracks_from_csv(Path(csv_path), n)
-
-    success = 0
-
-    for i, track in enumerate(tracks, start=1):
-        artist = track["artist"]
-        title  = track["title"]
-        print(f"[{i}/{len(tracks)}] {artist} - {title}")
-
-        # --- Etape 2 : recherche YouTube + telechargement MP3 ---
-        ok = download_audio_direct(artist, title, RAW_DIR)
-        if ok:
-            success += 1
-
-        time.sleep(1.0)  # pause pour eviter le rate-limiting YouTube
-
-    print(f"\nTermine : {success}/{len(tracks)} morceaux telecharges dans {RAW_DIR}/")
-
-    if success == 0:
-        print("Aucun morceau telecharge — pipeline annule.")
-        sys.exit(1)
-
-    # --- Etapes 3/4/5 : pipeline de build ---
-    run_step(
-        "1/3 - Construction des metadonnees",
-        [sys.executable, "src/data_utils/build_metadata.py"],
-    )
-    run_step(
-        "2/3 - Calcul des embeddings par segment",
-        [sys.executable, "scripts/build_segment_embeddings.py"],
-    )
-    run_step(
-        "3/3 - Construction de l'index FAISS",
-        [sys.executable, "src/index/build_index.py"],
-    )
-
-    # --- Etape 6 : verification des chiffres ---
-    verify_pipeline()
-
-    print(f"Pipeline termine — BDD prete avec {success} morceaux.")
-    print("Pour identifier un morceau :")
-    print("  python src/api/app.py data/raw/mon_fichier.mp3")
+        run_step("1/3 — Métadonnées",  [sys.executable, "src/data_utils/build_metadata.py"])
+        run_step("2/3 — Embeddings",   [sys.executable, "scripts/build_segment_embeddings.py"])
+        run_step("3/3 — Index FAISS",  [sys.executable, "src/index/build_index.py"])
+    else:
+        process_in_ram(all_tracks, csv_sources)
 
 
 if __name__ == "__main__":
     main()
-
-

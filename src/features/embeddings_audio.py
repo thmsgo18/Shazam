@@ -6,9 +6,6 @@ We have the available embedding functions
 and the function that will be called each time, which will choose the embedding function to apply based on the selected function.
 """
 
-import time
-from typing import List
-
 import numpy as np
 import librosa
 
@@ -224,7 +221,7 @@ def muq_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int
     return emb
 
 def muq_batch_embeddings(
-    segments: List[np.ndarray],
+    segments: list[np.ndarray],
     sr: int,
     model_name: str,
     target_sr: int = 24000,
@@ -237,7 +234,6 @@ def muq_batch_embeddings(
     Returns:
         emb: (B, H) float32
     """
-    t_rs = time.time()
     import torch
 
     if segments is None or len(segments) == 0:
@@ -271,8 +267,6 @@ def muq_batch_embeddings(
         x[i, :L] = y
         attn[i, :L] = 1
 
-    t_fwd = time.time()
-
     # Load model (cached) and run forward
     model, device = _load_muq(model_name=model_name)
 
@@ -300,9 +294,6 @@ def muq_batch_embeddings(
     if normalize:
         norms = np.linalg.norm(emb, axis=1, keepdims=True)
         emb = emb / np.maximum(norms, eps)
-        
-    t_end = time.time()
-    print(f"[muq_batch] B={len(segments)} rs+pad={t_fwd-t_rs:.3f}s fwd={t_end-t_fwd:.3f}s")
 
     return emb
 

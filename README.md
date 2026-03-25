@@ -1,227 +1,327 @@
-# Projet-Big_Data
+# Shazam Maison — Reconnaissance Audio par Embeddings + Fingerprinting
 
-## Idée
+![Python](https://img.shields.io/badge/Python-3.10-blue)
+![Méthodes](https://img.shields.io/badge/Embeddings-MFCC%20%7C%20CLAP%20%7C%20MuQ-green)
+![Index](https://img.shields.io/badge/Index-FAISS-orange)
 
-Faire un shazam maison. Le but du projet est de créer un shazam, où a partir d'un fichier audio, on doit retrouver la musique la plus proche grace à une base de donnée vectorielle de musiques.
+Système de reconnaissance musicale inspiré de Shazam. À partir d'un extrait audio, retrouve le morceau correspondant dans une base de données vectorielle.
 
-## Notes pratiques
+---
 
-1. Le fingerprinting audio est une technique qui permet d'identifier un son ou un morceau de musique à partir d'un extrait de mauvaise qualité. L'idée est que au lieu de comparer tout le fichier audio, on extrait une signature unique (comme une empreinte d'où le nom du principe).
-2. MFCC = Mel-Frequency Cepstral Coefficients. Les MFCC décrivent le timbre du son, la forme globale du spectre, pas les notes exactes mais la texture sonore. Ici c'est une fonction d'embedding.
-3. Pipeline d'une requête :
-   1. On vectorise le fichier audio donné avec une fonction d'embedding (mfcc ou clap)
-   2. On recherche dans la VDB grâce à FAISS.
-   3. On prend les N plus proches voisins avec K-nn.
-   4. On utilise la technique de fingerprinting sur ces N voisins.
-   5. On labelise la musique trouvée par cette recherche.
-
-Pour l'instant, MuQ prends la blinde de temps... Il faut voir comment on pourrait l'utiliser.
-Et Clap ne marche pas dutout... Ca serait cool de comprendre pk et de resoudre le problème.
-
-## À faire
-
-1. Faire le projet.
-2. Faire un rapport.
-
-## Articles de recherche
-
-### Thomas
-
-1. [An Industrial-Strength Audio Search Algorithm](research_paper/thomas/Wang03-shazam.pdf)
-
-    Cet article présente un algorithme de reconnaissance audio, développé par Avery Li-Chun Wang (Shazam).
-
-    L’objectif est d’identifier un morceau de musique à partir d’un court extrait sonore (quelques secondes), même lorsque celui-ci est fortement dégradé : bruit ambiant, voix superposées, distorsions, compression GSM ou coupures réseau.
-
-    L’article propose une méthode de fingerprinting audio basée sur l’extraction de pics fréquentiels, appelés *constellations*. Ces points caractéristiques sont ensuite combinés par paires pour former des hashs temporels discriminants. L’algorithme identifie les morceaux en détectant des alignements temporels cohérents entre l’extrait audio et les pistes de la base de données.
-
-2. [Cross modal audio search and retrieval with joint embeddings based on text and audio](research_paper/thomas/Audio%20search%20and%20retrieval%20-%20Microsoft.pdf)
-
-    Cet article traite de la recherche et de la récupération audio multimodales, en combinant texte et audio.
-
-    Les chercheurs s’attaquent ici à une des limites des moteurs de recherche audio : soit les moteurs comparent texte-texte (via des métadonnées), soit audio-audio (par similarité acoustique), sans interaction entre les deux.
-
-    Les auteurs proposent un embedding conjoint audio-texte à l’aide d’un réseau de neurones siamois (Siamese Neural Network). Ce réseau projette des caractéristiques audio et textuelles dans un même espace, où la similarité sémantique et acoustique peut être mesurée directement.
-
-3. [A fast audio similarity retrieval method for millions of music tracks](research_paper/thomas/A%20fast%20audio%20similarity%20retrieval%20method.pdf)
-
-    Cet article parle du problème de la recherche rapide de similarité audio dans des bases de données musicales de très grande taille (plusieurs millions de morceaux).
-
-    Le problème est que les méthodes de similarité audio les plus performantes reposent sur des modèles complexes (par exemple les modèles de timbre gaussiens), qui sont très coûteux à calculer et donc difficiles à appliquer sur de gros datasets.
-
-    Les auteurs proposent une méthode filter-and-refine qui porte sur une adaptation de l’algorithme FastMap. L’idée est de projeter les morceaux de musique dans un espace vectoriel de plus faible dimension, afin d’effectuer une pré-sélection rapide des candidats les plus proches grâce à une distance euclidienne, puis d'améliorer les résultats avec la mesure exacte (divergence de Kullback–Leibler symétrisée).
-
-### Clara
-
-1. [Music2Latent2: Audio Compression with Summary Embeddings and Autoregressive Decoding](research_paper/clara/Music2Latent2_audio_embeding.pdf)
-
-    Cet article présente Music2Latent2, un autoencodeur audio développé par Marco Pasini, Stefan Lattner et György Fazekas (Queen Mary University of London et Sony CSL Paris).
-
-    L'objectif est de compresser efficacement des signaux audio dans un espace latent compact tout en préservant la qualité de reconstruction et l'utilité pour des tâches de music information retrieval (MIR), même à des ratios de compression élevés (64× à 128×).
-
-    L'article propose une méthode basée sur des summary embeddings (embeddings non ordonnés), où chaque embedding capture des caractéristiques globales distinctes d'un segment audio (timbre, tempo), contrairement aux approches classiques qui répètent redondamment ces informations.
-
-    Le décodage autorégressive réintroduit du bruit dans le chunk précédent pour éviter l'accumulation d'erreurs. Music2Latent2 surpasse les autoencodeurs existants sur les métriques de qualité audio (FAD/FADclap) et obtient des résultats supérieurs sur des tâches MIR comme l'autotagging ou la classification d'instruments.
-
-2. [PDX: A Data Layout for Vector Similarity Search](research_paper/clara/PDX_vector_similarity.pdf)
-
-    Cet article présente PDX (Partition Dimensions Across), un format de stockage pour les vecteurs (embeddings) développé par Leonardo Kuffo, Elena Krippner et Peter Boncz (CWI Amsterdam).
-
-    L'objectif est d'accélérer la recherche de similarité vectorielle (Vector Similarity Search, VSS) en permettant un calcul de distance dimension par dimension, contrairement au format horizontal standard qui stocke les vecteurs bout-à-bout et nécessite d'accéder à toutes les dimensions même quand certaines ne sont jamais utilisées.
-
-    L'article propose un format qui stocke les vecteurs par blocs verticaux (toutes les valeurs d'une même dimension ensemble dans un bloc), ce qui permet de traiter plusieurs vecteurs simultanément.
-
-    - PDX-BOND est une stratégie de pruning flexible sans prétraitement qui fonctionne sur les vecteurs bruts et peut effectuer une recherche exacte. Les expériences montrent que PDX surpasse les systèmes vectoriels existants (FAISS, Milvus, USearch) de 2 à 7× en recherche exacte et approximative.
-
-    - PDXearch, un framework qui adapte dynamiquement le nombre de dimensions explorées selon la requête, et avec des algorithmes de dimension-pruning qui approximent la distance en n'évaluant qu'un sous-ensemble de dimensions, permettant d'éliminer rapidement les vecteurs non-pertinents.
-
-    PDX peut optimiser le calcul de distance lors de la recherche de l'extrait audio dans une base d'embeddings. PDX-BOND pourrait prioriser les dimensions les plus discriminantes pour éliminer rapidement les morceaux non-correspondants sans parcourir toutes les dimensions.
-
-3. [MuQ: Self-Supervised Music Representation Learning with Mel Residual Vector Quantization](MuQ_music_vector.pdf)
-
-    Cet article présente MuQ, un modèle d'apprentissage auto-supervisé pour la représentation musicale, développé par Haina Zhu, Yizhi Zhou et leurs collaborateurs (Shanghai Jiao Tong University, Nanjing University, Tencent AI Lab).
-
-    L'objectif est de créer des représentations audio universelles capables de capturer simultanément les informations sémantiques (genre, émotion) et acoustiques (mélodie, tonalité, timbre) de la musique, pour améliorer les performances sur les tâches de music information retrieval (MIR) comme le tagging, la classification d'instruments ou la détection de tonalité.
-
-    L'article propose Mel-RVQ (Mel Residual Vector Quantization), un tokenizer léger qui quantifie directement le spectrogramme Mel via une projection linéaire résiduelle. Le modèle MuQ utilise une architecture Conformer (12 couches, 310M paramètres) entraînée par masked language modeling à prédire ces tokens multi-résiduels. Un entraînement itératif raffine les représentations en réentraînant Mel-RVQ sur les latents de MuQ.
-
-### Vincent
-
-1. [« Audio Fingerprinting – A Review » (Cano et al., 2005)](research_paper/vincent/audio_fingerprinting.pdf)
-
-   L’article propose une revue des systèmes de fingerprinting audio, vus comme des signatures compactes permettant d’identifier un enregistrement sans métadonnées ni watermark, et robustes aux distorsions usuelles.
-​
-Les auteurs comparent fingerprinting et watermarking, détaillent les exigences (robustesse, compacité, pouvoir discriminant, scalabilité, efficacité) et les principaux usages : identification de titres, vérification d’intégrité, support au watermarking et recherche audio par similarité.
-​
-Ils décrivent un cadre général avec front-end (prétraitement, analyse temps‑fréquence, extraction de descripteurs), modélisation d’empreintes et algorithmes de recherche efficaces (mesures de similarité, indexation, pruning).
-
-2. [Indexing and Search for Fast Music Identification (Cha)](research_paper/vincent/fast_music_identification.pdf)
-
-   Cet article propose un nouvel algorithme d’indexation et de recherche pour identifier rapidement des chansons à partir de fingerprints binaires très haute dimension.
-Les chansons sont représentées comme des vecteurs de 3200 bits, formés d’environ 200 sous‑fingerprints de 16 bits extraits sur 16 bandes fréquentielles.
-Pour surmonter la malédiction de la dimension, l’auteur remplace les arbres classiques par un fichier inversé où chaque sous‑fingerprint pointe vers les chansons et positions où il apparaît.
-Il génère aussi, à l’indexation, des versions avec quelques bits inversés pour gérer les erreurs sans explosion du coût de recherche.
-La recherche utilise un accumulateur avec multiple sub‑fingerprint match, offset match et early termination, afin de ne charger la fingerprint complète que pour très peu de candidats.
-
-3. [Predicting a Song Title from Audio Embeddings (Bleiweiss)](research_paper/vincent/predicting_song_title.pdf)
-
-   Cet article présente un modèle de deep learning pour générer des titres de chansons à partir d’audio en réutilisant un réseau de captioning d’images pré‑entraîné (ResNet + LSTM).
-Le signal est converti en spectrogramme 2D traité comme une image, puis décodé en texte via un LSTM, après entraînement sur Conceptual Captions et adaptation sur Million Song Dataset et Free Music Archive.
-
-
-### Maria
-
-1. [Two birds with one stone : Query-dependent moment retrieval in muted video or audio via inter-token interactions](research_paper/maria/article_audio_tokens.pdf)
-
-    Cet article propose un cadre unifié (IAR) pour la récupération de moments temporels dans des audios (AMR : Audio Moment Retrieval) ou des vidéos muettes (MVRM : Muted Video Moment Retrieval) basés sur des requêtes textuelles. Il s'agit, par exmple, de localiser un segment audio correspondant à une description telle que "le chien aboie".
-
-    De l'importance est accordée aux interations en tokens, par exemple pour les séquences de features audios/textuelles, la préservation des frontières temporelles et une architectures légère pour une généralisation cross-modale (audio/vidéo).
-
-    Ces travaux mentionnent des techniques intéressantes pour l'extraction de features audios avec CRNN et peut donner des idées pour la gestion des données.
-
-2. [Sound and music biases in deep music transcription models : a systematic analysis](research_paper/maria/deep_music_transcription.pdf)
-
-   Le sujet de cet article porte sur la tarnscription automatique de musique (AMT) qui consiste à convertir un signal audio en représentation symbolique (notes avec pitch, onset, offset et velocity). Les progrès récents, basés sur des réseaux de neurones profonds (DNN), se concentrent principalement sur la musique classique pour piano, en raison de la disponibilité limitée de datasets annotés comme MAESTRO. Les auteurs examinent la robustesse de ces modèles face aux décalages de distribution (distribution shifts) en son (environnement d'enregistrement) et en musique (genre, polyphonie, dynamique), un aspect sous-exploré.
-   Cet article apporte des informations intéressantes en termes d'évaluation de datasets musicaux et de tests sur ces derniers.
-
-3. [Enhanced audio-visual speech enhancement with posterior sampling methods in recurrent variational autoencoders](research_paper/maria/audio_speech_enhancement.pdf)
-
-   Cet article aborde l'amélioration de la parole en présence de bruit. Les méthodes traditionnelles audio-seules ne fonctionnent pas de manière optimale dans les environnements bruyants à faible rapport signal-bruit (SNR). Les auteurs de cet article proposent un cadre audio-visuel non supervisé basé sur un auto-encodeur variationnel récurrent (AV-RVAE), qui intègre des indices visuels (mouvements des lèvres) pour complémenter l'audio. Ils étendent l'inférence postérieure avec des méthodes d'échantillonnage avancées pour mieux capturer les distributions latentes complexes, surpassant les approches déterministes comme MAP-EM. 
-   Cet article n'a pas une utilité directe dans le cadre de ce projet, en revanche, il apporte malgré tout des informations intéressantes en matière de traitement du bruit et d'extraction d'audios.
-
-
-## Premiers pas
-
-### Comment démarrer le projet
-
-1. Importer le projet sur sa machine.
-2. Créer un venv :
-
-    ```bash
-        python3 -m venv venv
-        # Activation du venv
-        source venv/bin/activate
-        # Vérification de l'activation du venv
-        which python
-    ```
-
-3. Installer les librairies necessaires pour l'éxécution du projet :
-
-    ```bash
-        pip install -r requirements.txt
-    ```
-
-### Ajout d'une librairie
-
-1. On utilise pip pour installer la librairie qu'on souhaite (Il faut bien vérifier qu'on se situe dans le venv).
-2. Puis on fait la commande :
-
-    ```bash
-        pip freeze > requirements.txt
-        # Cette commande permet de mettre à jour les librairies nécessaires pour éxecuter le code du projet.
-    ```
-
-### J'ai des modifications en local et je suis sur une ancienne version du projet
+## Cheat Sheet
 
 ```bash
-    git stash
-    git pull origin main
-    git stash pop
+# 1. Alimenter la base (télécharge + calcule embeddings + fingerprints)
+python scripts/download_music.py
+
+# 2. Identifier un morceau
+python -c "
+from src.retrieval.query_pipeline import identify_track
+results = identify_track('mon_audio.mp3', method='mfcc')
+for rank, (track_id, score) in enumerate(results, 1):
+    print(f'{rank}. {track_id} — {score:.4f}')
+"
+
+# 3. Reconstruire l'index FAISS
+python src/index/build_index.py
 ```
+
+---
+
+## Pipeline
+
+```
+CSV Kaggle Spotify
+      │
+      ▼
+download_music.py
+      │  yt-dlp → audio en RAM
+      │  embed_segment() → embeddings.npy
+      │  extract_fingerprint() → fingerprints.pkl
+      │  segments.parquet + metadata.parquet
+      ▼
+build_index.py → index_{method}_{type}.faiss
+      │
+      ▼
+identify_track(audio)
+      │
+      ├── Stage 1 : segmenter → embedder → FAISS → Top 20 candidats
+      │
+      └── Stage 2 : fingerprint requête ↔ fingerprints candidats → re-ranking
+                                │
+                                ▼
+                        Top N résultats
+```
+
+---
+
+## Installation
+
+### Prérequis système
+
+- Python 3.10
+- ffmpeg : `brew install ffmpeg` (macOS) / `apt install ffmpeg` (Linux)
+- Clé API Kaggle : créer un compte sur [kaggle.com](https://kaggle.com), télécharger `kaggle.json` et le placer dans `~/.kaggle/kaggle.json`
+
+### Environnement Python
+
+```bash
+# Cloner le projet
+git clone https://github.com/thmsgo18/Shazam
+cd Shazam
+
+# Créer et activer le venv
+python3 -m venv venv
+source venv/bin/activate  # macOS / Linux
+# .\venv\Scripts\activate  # Windows
+
+# Installer les dépendances
+pip install -r requirements.txt
+```
+
+### Ajouter une librairie
+
+```bash
+pip install ma-librairie
+pip freeze > requirements.txt
+```
+
+---
+
+## Configuration — `src/config.py`
+
+Tous les paramètres du projet sont centralisés ici. **Ne modifier que ce fichier** pour changer le comportement du système.
+
+### Audio
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `SAMPLE_RATE` | `22050` | Fréquence d'échantillonnage de base (Hz) |
+| `CLAP_SAMPLE_RATE` | `48000` | Fréquence requise par le modèle CLAP |
+| `MUQ_SAMPLE_RATE` | `24000` | Fréquence requise par le modèle MuQ |
+
+### Segmentation
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `SEGMENT_WIN_S` | `5.0` | Durée de chaque segment (secondes) |
+| `SEGMENT_HOP_S` | `3.0` | Pas entre deux segments (secondes) |
+| `SEGMENT_MIN_WIN` | `0.8` | Fraction minimale pour garder le dernier segment |
+
+### Embedding
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `EMBEDDING_METHOD` | `"mfcc"` | Méthode active : `"mfcc"`, `"clap"` ou `"muq"` |
+| `CLAP_MODEL_NAME` | `"laion/clap-htsat-unfused"` | Modèle CLAP (HuggingFace) |
+| `MUQ_MODEL_NAME` | `"OpenMuQ/MuQ-large-msd-iter"` | Modèle MuQ (HuggingFace) |
+| `MUQ_BATCH_SIZE` | `8` | Nombre de segments traités en parallèle par MuQ |
+
+### Recherche vectorielle
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `VECTOR_TOP_K_SEGMENTS` | `200` | Nombre de segments récupérés par FAISS |
+| `VECTOR_TOP_N_TRACKS` | `20` | Nombre de candidats pour le re-ranking |
+| `VECTOR_TOP_N_RESULTS` | `5` | Nombre de résultats finaux retournés |
+| `INDEX_TYPE` | `"flat"` | Type d'index : `"flat"`, `"hnsw"` ou `"ivf"` |
+
+### Optimisations
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `OPT_FLOAT16` | `True` | Charger CLAP/MuQ en demi-précision (réduit la RAM) |
+| `OPT_BATCH_EMBED` | `True` | Embedder les segments par batch (plus rapide) |
+| `OPT_SHORTCIRCUIT` | `True` | Sauter le Stage 2 si le 1er candidat est évident |
+| `OPT_PARALLEL_FP` | `True` | Calculer les fingerprints en parallèle (Stage 2) |
+
+### Affichage
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `PROGRESS_DATASET` | `True` | Barre de progression globale sur l'ensemble des tracks |
+| `PROGRESS_TRACK` | `True` | Barre de progression par morceau (segments) |
+
+---
+
+## Alimenter la base — `scripts/download_music.py`
+
+Télécharge l'audio en RAM, calcule embeddings + fingerprints, construit l'index FAISS. **Aucun MP3 n'est stocké sur disque.**
+
+Les morceaux déjà traités pour la méthode active sont automatiquement ignorés.
+
+```bash
+# Sans --csv : utilise automatiquement tous les CSV Kaggle disponibles
+python scripts/download_music.py
+
+# Un seul CSV
+python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv
+
+# Plusieurs CSV spécifiques
+python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-france.csv --csv data/kaggle/data/spotify-streaming-top-50-usa.csv
+
+# Tous les CSV d'un dossier
+python scripts/download_music.py --csv data/kaggle/data/
+```
+
+> **Changer de méthode :** modifier `EMBEDDING_METHOD` dans `config.py` et relancer.
+> Les morceaux déjà traités en MFCC ne seront pas ignorés pour CLAP — le script détecte la méthode.
+
+### Ordre des étapes internes
+
+```
+Pour chaque morceau :
+  1. Recherche YouTube via yt-dlp
+  2. Téléchargement audio en RAM (dossier temporaire auto-supprimé)
+  3. Calcul des embeddings (méthode config.EMBEDDING_METHOD)
+  4. Calcul du fingerprint (Shazam-like)
+  5. Fusion avec la base existante
+  6. Suppression de l'audio
+→ Construction de l'index FAISS
+```
+
+---
+
+## Identifier un morceau — `src/retrieval/query_pipeline.py`
+
+```python
+from src.retrieval.query_pipeline import identify_track
+
+# Avec la méthode par défaut (config.EMBEDDING_METHOD)
+results = identify_track("mon_audio.mp3")
+
+# Avec une méthode spécifique
+results = identify_track("mon_audio.mp3", method="clap")
+
+# Changer le nombre de résultats
+results = identify_track("mon_audio.mp3", top_n=10)
+
+# results = [(track_id, score), ...]
+for rank, (track_id, score) in enumerate(results, 1):
+    print(f"{rank}. {track_id} — {score:.4f}")
+```
+
+---
+
+## Reconstruire l'index — `src/index/build_index.py`
+
+À relancer si les embeddings ont changé sans passer par `download_music.py`.
+
+```bash
+# Utilise la méthode et le type d'index définis dans config.py
+python src/index/build_index.py
+```
+
+---
+
+## Tester les trois méthodes
+
+> **Mac Apple Silicon :** le fallback CPU est activé automatiquement. Aucune variable d'environnement nécessaire.
+
+```bash
+# MFCC (~8 secondes)
+python -c "
+from src.retrieval.query_pipeline import identify_track
+results = identify_track('data/raw/mon_audio.mp3', method='mfcc')
+for rank, (track_id, score) in enumerate(results, 1):
+    print(f'{rank}. {track_id} — {score:.4f}')
+"
+
+# CLAP (~20 secondes)
+python -c "
+from src.retrieval.query_pipeline import identify_track
+results = identify_track('data/raw/mon_audio.mp3', method='clap')
+for rank, (track_id, score) in enumerate(results, 1):
+    print(f'{rank}. {track_id} — {score:.4f}')
+"
+
+# MuQ (~2-3 minutes sur CPU)
+python -c "
+from src.retrieval.query_pipeline import identify_track
+results = identify_track('data/raw/mon_audio.mp3', method='muq')
+for rank, (track_id, score) in enumerate(results, 1):
+    print(f'{rank}. {track_id} — {score:.4f}')
+"
+```
+
+### Résultats attendus
+
+| Méthode | Temps (CPU) | Score 1er / 2ème | Précision |
+|---------|-------------|------------------|-----------|
+| MFCC | ~8s | x36 | ✅ Bon |
+| CLAP | ~20s | x27 | ✅ Bon |
+| MuQ | ~2min30 | x70 | ✅ Excellent |
+
+Le bon morceau doit toujours apparaître **en 1ère position** avec un score très largement supérieur au 2ème.
+
+---
 
 ## Structure du projet
 
-```bash
-shazam/
-├── README.md                  # Présentation du projet, comment lancer
-├── requirements.txt           # Dépendances Python
-├── .gitignore
-
-├── data/                      # Les données du projet
-│   ├── raw/                   # Audios bruts (les datasets téléchargés)
-│   ├── processed/             # Audios nettoyés / segments
-│   ├── features/              # Descripteurs / empreintes / embeddings
-│   └── index/                 # Fichiers de la base vectorielle
-
+```
+Shazam/
+├── README.md
+├── requirements.txt
+│
+├── data/
+│   ├── kaggle/data/          # CSV Kaggle Spotify (téléchargés automatiquement)
+│   ├── processed/            # metadata.parquet
+│   ├── features/             # embeddings_{method}.npy
+│   │                         # segments_{method}.parquet
+│   │                         # fingerprints.pkl
+│   └── index/                # index_{method}_{type}.faiss
+│
 ├── src/
-│   ├── __init__.py
-│   ├── config.py              # Chemins de fichiers, hyperparamètres simples
-
-│   ├── data_utils/            # Gestion des données
-│   │   ├── __init__.py
-
-│   ├── audio/                 # Tout ce qui touche au signal audio
-│   │   ├── __init__.py
-│   │   ├── loading.py         # Chargement audio, resampling, mono, etc.
-│   │   └── preprocessing.py   # Normalisation, découpe en fenêtres, etc.
-
-│   ├── features/              # Représentations numériques de l’audio
-│   │   ├── __init__.py
-
-│   ├── index/                 # Base de données vectorielle
-│   │   ├── __init__.py
-│   │   └── build_index.py     # Script pour construire et mettre à jour l’index
-
-│   ├── retrieval/             # Pipeline pour répondre à une requête
-│   │   ├── __init__.py
-
-│   └── api/                   # Interface simple pour tester le Shazam
-│       ├── __init__.py
-│       └── app.py             # Petitte API pour envoyer un audio et recevoir le résultat
-
-├── scripts/                   # Scripts à lancer depuis le terminal
-
-└── tests/                     # Pour les tests
-    ├── __init__.py
-
+│   ├── config.py             # ← Tous les paramètres ici
+│   ├── audio/
+│   │   ├── loading.py        # Chargement audio (librosa)
+│   │   └── preprocessing.py  # Découpage en segments
+│   ├── features/
+│   │   ├── embeddings_audio.py  # MFCC, CLAP, MuQ
+│   │   └── fingerprint.py       # Constellation map (Shazam)
+│   ├── index/
+│   │   └── build_index.py    # Construction index FAISS
+│   ├── retrieval/
+│   │   ├── searcher.py       # Recherche dans FAISS
+│   │   └── query_pipeline.py # Pipeline complet (Stage 1 + Stage 2)
+│   └── api/
+│       └── app.py            # CLI Click
+│
+└── scripts/
+    ├── download_music.py        # Téléchargement + build pipeline
+    ├── build_segment_embeddings.py  # Calcul embeddings sur data/raw/
+    └── evaluate.py              # Évaluation Top-1 / Top-5
 ```
 
-## Lien intéressant
+---
 
-1. Kaggle: <https://www.kaggle.com>
-2. Free Music Archive: <https://freemusicarchive.org>
-3. GTZAN Genre Collection: <https://www.kaggle.com/datasets/carlthome/gtzan-genre-collection>
-4. MusicGenres Dataset (HuggingFace): <https://huggingface.co/datasets/ccmusic-database/music_genre>
-5. MusicCaps / AudioSet: <https://huggingface.co/datasets/google/MusicCaps>
-6. Recherche: <https://dblp.org> & <https://dblp.uni-trier.de/search/publ>
-7. Apache spark: <https://spark.apache.org>
+## Dépannage
+
+### `FileNotFoundError: Pas d'index 'clap'`
+```
+Change EMBEDDING_METHOD dans config.py ou relance download_music.py.
+Méthodes disponibles : mfcc
+```
+→ Relancer `download_music.py` avec `EMBEDDING_METHOD = "clap"` dans `config.py`.
+
+### `NotImplementedError: MPS device` (Mac Apple Silicon)
+→ Normalement géré automatiquement. Si le problème persiste :
+```bash
+PYTORCH_ENABLE_MPS_FALLBACK=1 python ...
+```
+
+### `AssertionError: Mismatch embeddings vs segments`
+→ Les fichiers `.npy` et `.parquet` sont désynchronisés. Relancer `download_music.py` pour reconstruire.
+
+### Le processus est bloqué (0% CPU)
+→ Manque de RAM. Fermer les autres applications et relancer. MuQ nécessite ~2Go libres, CLAP ~1.5Go.
+
+---
+
+## Git — Récupérer les modifications de l'équipe
+
+```bash
+git stash          # Mettre de côté tes modifications locales
+git pull           # Récupérer les dernières modifications
+git stash pop      # Réappliquer tes modifications
+```

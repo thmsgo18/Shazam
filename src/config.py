@@ -14,11 +14,12 @@ These different environment variables are divided into 7 categories :
 
 
 # Paths
-RAW_DIR          = "data/raw"
-PROCESSED_DIR    = "data/processed"
-METADATA_PATH    = "data/processed/metadata.parquet"
-FEATURES_DIR     = "data/features"
-INDEX_DIR        = "data/index"
+RAW_DIR              = "data/raw"
+PROCESSED_DIR        = "data/processed"
+METADATA_PATH        = "data/processed/metadata.parquet"
+FEATURES_DIR         = "data/features"
+INDEX_DIR            = "data/index"
+FINGERPRINTS_PATH    = "data/features/fingerprints.pkl"
 
 # Audio
 SAMPLE_RATE = 22050
@@ -50,7 +51,7 @@ VECTOR_TOP_N_RESULTS  = 5
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" ou "muq"
+EMBEDDING_METHOD = "clap"   # "mfcc" ou "clap" ou "muq"
 CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 
@@ -60,8 +61,12 @@ MUQ_BATCH_SIZE   = 8
 
 # Optimisations
 # Mettre à False pour revenir au comportement de base sans optimisations
-OPT_FLOAT16           = True   # Charger CLAP/MuQ en demi-précision (float16) → moins de RAM, plus rapide
-OPT_BATCH_EMBED       = True   # Embedder tous les segments en un seul batch dans identify_track
-OPT_FINGERPRINT_PARALLEL = True  # Charger et fingerprinter les candidats en parallèle (Stage 2)
-OPT_SHORTCIRCUIT      = True   # Court-circuiter le Stage 2 si le 1er candidat FAISS est évident
-OPT_SHORTCIRCUIT_RATIO = 10.0  # Ratio score[0]/score[1] au-delà duquel on court-circuite
+OPT_FLOAT16              = True   # Charger CLAP/MuQ en demi-précision (float16) → moins de RAM, plus rapide
+OPT_BATCH_EMBED          = True   # Embedder tous les segments en un seul batch dans identify_track
+OPT_FINGERPRINT_PARALLEL = True   # Charger et fingerprinter les candidats en parallèle (Stage 2)
+OPT_SHORTCIRCUIT         = True   # Court-circuiter le Stage 2 si le 1er candidat FAISS est évident
+OPT_SHORTCIRCUIT_RATIO   = 10.0  # Ratio score[0]/score[1] au-delà duquel on court-circuite
+
+# Affichage
+PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks
+PROGRESS_TRACK    = True   # Barre de progression par morceau (segments)

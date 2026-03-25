@@ -9,11 +9,14 @@ Responsable : Personne C
 from __future__ import annotations
 
 import os
+import pickle
+from pathlib import Path
 
 # Active le fallback CPU pour les opérations non supportées sur MPS (Apple Silicon).
 # Sans effet sur les autres machines (CUDA, CPU).
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+import librosa
 import torch
 torch.set_num_threads(4)
 
@@ -22,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 import src.config as config
 from src.audio.loading import load_audio
 from src.audio.preprocessing import iter_segments
-from src.features.embeddings_audio import embed_segment, muq_batch_embeddings, clap_embedding, mfcc_stats_embedding
+from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
 from src.retrieval.searcher import load_searcher, search_segments, aggregate_by_track
 from src.features.fingerprint import extract_fingerprint, fingerprint_similarity
 
@@ -121,14 +124,31 @@ def identify_track(
         if candidates[1][1] > 0 and candidates[0][1] / candidates[1][1] >= config.OPT_SHORTCIRCUIT_RATIO:
             return [(track_id, score) for track_id, score in candidates[:top_n]]
 
-    query_fp = extract_fingerprint(waveform, sr) # Extraction du fingerprint de l'audio recherché.
+    # Calcul du fingerprint de la requête — toujours à SAMPLE_RATE pour cohérence avec les fingerprints stockés
+    if targ_sr != config.SAMPLE_RATE:
+        waveform_fp = librosa.resample(waveform, orig_sr=targ_sr, target_sr=config.SAMPLE_RATE)
+    else:
+        waveform_fp = waveform
+    query_fp = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+
+    # Charger les fingerprints pré-calculés si disponibles (évite de recharger les MP3)
+    fp_path = Path(config.FINGERPRINTS_PATH)
+    stored_fps = None
+    if fp_path.exists():
+        with open(fp_path, "rb") as f:
+            stored_fps = pickle.load(f)
 
     def process_candidate(candidate):
-        """Charge l'audio et calcule le fingerprint d'un candidat."""
+        """Récupère le fingerprint d'un candidat (depuis le cache ou en rechargeant l'audio)."""
         track_id, score_faiss = candidate
-        path = segments[segments["track_id"] == track_id].iloc[0]["path"]
-        candidate_waveform, candidate_sr = load_audio(path, target_sr=targ_sr)
-        candidate_fp = extract_fingerprint(candidate_waveform, candidate_sr)
+        if stored_fps is not None and track_id in stored_fps:
+            # Fingerprint pré-calculé disponible — pas besoin de recharger l'audio
+            candidate_fp = stored_fps[track_id]
+        else:
+            # Fallback : recharger l'audio depuis le disque
+            path = segments[segments["track_id"] == track_id].iloc[0]["path"]
+            candidate_waveform, _ = load_audio(path, target_sr=config.SAMPLE_RATE)
+            candidate_fp = extract_fingerprint(candidate_waveform, config.SAMPLE_RATE)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
         return (track_id, score_faiss * score_fp)
 
@@ -141,7 +161,3 @@ def identify_track(
         final_scores = [process_candidate(c) for c in candidates]
 
     return sorted(final_scores, key=lambda x: x[1], reverse=True)[:top_n] # Retourner les top_n meilleurs morceaux.
-
-
-
-

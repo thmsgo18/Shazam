@@ -34,7 +34,20 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     seg_path = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
 
     if not index_path.exists():
-        raise FileNotFoundError(f"Index introuvable : {index_path}. Lance build_index.py d'abord.")
+        # Cherche quelles méthodes sont disponibles pour aider l'utilisateur
+        index_dir = Path(config.INDEX_DIR)
+        available = [p.stem.replace(f"_{index_type}", "").replace("index_", "")
+                     for p in index_dir.glob(f"index_*_{index_type}.faiss")]
+        if available:
+            raise FileNotFoundError(
+                f"Pas d'index '{method}' (type={index_type}) dans {index_dir}/.\n"
+                f"Méthodes disponibles : {', '.join(sorted(available))}.\n"
+                f"Change EMBEDDING_METHOD dans config.py ou relance download_music.py."
+            )
+        raise FileNotFoundError(
+            f"Aucun index trouvé dans {index_dir}/.\n"
+            f"Lance d'abord : python scripts/download_music.py"
+        )
 
     index = faiss.read_index(str(index_path))
     segments = pd.read_parquet(str(seg_path))
