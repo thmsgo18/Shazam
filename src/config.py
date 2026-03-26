@@ -51,13 +51,17 @@ VECTOR_TOP_N_RESULTS  = 5
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "clap"   # "mfcc" ou "clap" ou "muq"
+EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" ou "muq"
 CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 
 MUQ_SAMPLE_RATE  = 24000
 MUQ_MODEL_NAME   = "OpenMuQ/MuQ-large-msd-iter"
 MUQ_BATCH_SIZE   = 8
+
+# Téléchargements parallèles (download_music.py)
+# Augmenter si connexion rapide, réduire si bans YouTube fréquents
+DOWNLOAD_WORKERS = 3
 
 # Optimisations
 # Mettre à False pour revenir au comportement de base sans optimisations

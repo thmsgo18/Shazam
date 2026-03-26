@@ -16,10 +16,13 @@ Téléchargement du CSV Kaggle :
 
 Usage :
     # Un seul CSV
-    python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv --n 50
+    python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
     # Dossier entier (tous les CSV fusionnés)
-    python scripts/download_music.py --csv data/kaggle/data/ --n 50
+    python scripts/download_music.py --csv data/kaggle/data/
+
+    # Sans --csv : utilise automatiquement tous les CSV Kaggle disponibles
+    python scripts/download_music.py
 """
 
 from __future__ import annotations
@@ -28,10 +31,14 @@ import hashlib
 import os
 import pickle
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -56,7 +63,6 @@ from src.audio.preprocessing import iter_segments
 from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
 from src.features.fingerprint import extract_fingerprint
 
-RAW_DIR = Path("data/raw")
 FEATURES_DIR = Path("data/features")
 PROCESSED_DIR = Path("data/processed")
 
@@ -119,70 +125,180 @@ def load_tracks_from_csv(csv_path: Path) -> list[dict]:
 # Téléchargement
 # ===========================================================================
 
-def download_to_disk(artist: str, title: str, dest_dir: Path) -> bool:
-    """Télécharge le MP3 dans dest_dir (ancien comportement --store-audio)."""
-    safe_name = "".join(
-        c if c.isalnum() or c in "-_ " else "_"
-        for c in f"{artist}_{title}"
-    ).strip()
-    filename  = f"{safe_name[:60]}.mp3"
-    dest_path = dest_dir / filename
-
-    if dest_path.exists():
-        return True
-
-    query = f"{artist} {title} official audio"
-    cmd = [
-        "yt-dlp", f"ytsearch1:{query}",
-        "--extract-audio", "--audio-format", "mp3",
-        "--audio-quality", "5",
-        "--output", str(dest_dir / f"{safe_name[:60]}.%(ext)s"),
-        "--quiet", "--no-warnings", "--socket-timeout", "30",
+def _download_mp3(
+    artist: str, title: str, retries: int = 3
+) -> tuple[str, str, str, None] | tuple[None, None, None, str]:
+    """
+    Télécharge uniquement le MP3 via yt-dlp (subprocess seul, pas de numpy/librosa).
+    Retourne (tmpdir, mp3_path, youtube_url, None) en cas de succès,
+    ou (None, None, None, reason) en cas d'échec.
+    """
+    queries = [
+        f"{artist} {title} official audio",
+        f"{artist} {title}",
     ]
-    try:
-        result = subprocess.run(cmd, timeout=120)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
-
-def download_to_ram(artist: str, title: str, target_sr: int) -> tuple[np.ndarray, int] | tuple[None, None]:
-    """
-    Télécharge l'audio dans un dossier temporaire, le charge en RAM, puis supprime le fichier.
-    Aucun MP3 n'est conservé sur disque après l'appel.
-    """
-    query = f"{artist} {title} official audio"
-    cmd = [
-        "yt-dlp", f"ytsearch1:{query}",
+    base_cmd = [
+        "yt-dlp",
         "--extract-audio", "--audio-format", "mp3",
         "--audio-quality", "5",
         "--output", "%(id)s.%(ext)s",
-        "--quiet", "--no-warnings", "--socket-timeout", "30",
+        "--quiet", "--no-warnings",
+        "--socket-timeout", "30",
+        "--extractor-args", "youtube:player_client=android",
     ]
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = subprocess.run(cmd, timeout=120, cwd=tmpdir)
-            if result.returncode != 0:
-                return None, None
+    last_reason = "introuvable sur YouTube"
+    for query in queries:
+        cmd = [base_cmd[0], f"ytsearch1:{query}"] + base_cmd[1:]
+        for attempt in range(retries):
+            tmpdir = tempfile.mkdtemp()
+            proc = None
+            try:
+                # start_new_session=True : yt-dlp + ffmpeg dans le même groupe de processus
+                # → on peut tout tuer d'un coup en cas de timeout
+                proc = subprocess.Popen(
+                    cmd, cwd=tmpdir,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                try:
+                    _, stderr_bytes = proc.communicate(timeout=45)
+                except subprocess.TimeoutExpired:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    proc.wait()
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    last_reason = "timeout"
+                    if attempt < retries - 1:
+                        time.sleep(3)
+                        continue
+                    break
 
-            files = list(Path(tmpdir).glob("*.mp3"))
-            if not files:
-                return None, None
+                if proc.returncode != 0:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    stderr = stderr_bytes.decode(errors="ignore")
+                    if "Sign in" in stderr or "age" in stderr:
+                        last_reason = "restriction d'âge YouTube"
+                        break
+                    if "unavailable" in stderr or "not available" in stderr:
+                        last_reason = "vidéo indisponible dans cette région"
+                        break
+                    last_reason = "erreur yt-dlp"
+                    if attempt < retries - 1:
+                        time.sleep(3)
+                        continue
+                    break
 
-            waveform, sr = librosa.load(str(files[0]), sr=target_sr, mono=True)
-            return waveform, sr
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        return None, None
+                files = list(Path(tmpdir).glob("*.mp3"))
+                if not files:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    last_reason = "introuvable sur YouTube"
+                    break
+
+                youtube_url = f"https://www.youtube.com/watch?v={files[0].stem}"
+                return tmpdir, str(files[0]), youtube_url, None
+            except Exception as e:
+                if proc is not None:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    except Exception:
+                        pass
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                last_reason = str(e)
+                break
+
+    return None, None, None, last_reason
 
 
 # ===========================================================================
 # Pipeline RAM — traitement sans stockage MP3
 # ===========================================================================
 
+def _save_track(
+    track_id: str,
+    method: str,
+    track_embeddings: list,
+    track_segments: list[dict],
+    new_fp: dict,
+    metadata_row: dict,
+    existing_fp: dict,
+    emb_path: Path,
+    seg_path: Path,
+    fp_path: Path,
+    meta_path: Path,
+) -> None:
+    """
+    Sauvegarde un track sur disque immédiatement (append).
+    Si le track_id existe déjà (crash partiel précédent), ses anciennes données
+    sont supprimées et réécrites proprement — jamais de doublon.
+    """
+    new_emb = np.vstack(track_embeddings).astype(np.float32)
+
+    # Charger embeddings existants (avec gestion corruption)
+    if emb_path.exists():
+        try:
+            existing_emb = np.load(emb_path)
+        except Exception:
+            console.print("[yellow]⚠ embeddings.npy corrompu — réinitialisé.[/yellow]")
+            existing_emb = np.empty((0, new_emb.shape[1]), dtype=np.float32)
+    else:
+        existing_emb = np.empty((0, new_emb.shape[1]), dtype=np.float32)
+
+    # Charger segments existants
+    if seg_path.exists():
+        df_seg = pd.read_parquet(seg_path)
+    else:
+        df_seg = pd.DataFrame(columns=["segment_id", "track_id", "start_s"])
+
+    # Écrasement si le track existait déjà partiellement (crash précédent)
+    if track_id in df_seg["track_id"].values:
+        old_seg_ids = df_seg[df_seg["track_id"] == track_id]["segment_id"].values
+        df_seg = df_seg[df_seg["track_id"] != track_id].reset_index(drop=True)
+        keep = np.ones(len(existing_emb), dtype=bool)
+        valid_ids = old_seg_ids[old_seg_ids < len(existing_emb)]  # sécurité bounds
+        keep[valid_ids] = False
+        existing_emb = existing_emb[keep]
+        df_seg["segment_id"] = range(len(df_seg))
+
+    offset = len(existing_emb)
+
+    # Assigner les nouveaux segment_ids
+    df_new_seg = pd.DataFrame([
+        {"segment_id": offset + i, "track_id": s["track_id"], "start_s": s["start_s"]}
+        for i, s in enumerate(track_segments)
+    ])
+
+    # Écrire segments EN PREMIER — source de vérité pour l'overwrite au prochain run
+    df_seg = pd.concat([df_seg, df_new_seg], ignore_index=True)
+    df_seg.to_parquet(seg_path, index=False)
+
+    # Puis embeddings
+    emb_mat = np.vstack([existing_emb, new_emb]).astype(np.float32)
+    np.save(emb_path, emb_mat)
+
+    # Fingerprints
+    existing_fp.update(new_fp)
+    with open(fp_path, "wb") as f:
+        pickle.dump(existing_fp, f)
+
+    # Metadata — mise à jour embedded_methods si le track existe déjà
+    if meta_path.exists():
+        df_meta = pd.read_parquet(meta_path)
+        if track_id in set(df_meta["track_id"]):
+            idx = df_meta.index[df_meta["track_id"] == track_id][0]
+            current = df_meta.at[idx, "embedded_methods"] or []
+            if method not in current:
+                df_meta.at[idx, "embedded_methods"] = list(current) + [method]
+        else:
+            df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
+    else:
+        df_meta = pd.DataFrame([metadata_row])
+    df_meta.to_parquet(meta_path, index=False)
+
+
 def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     """
     Pour chaque morceau : télécharge en RAM, calcule embeddings + fingerprint,
     sauvegarde embeddings.npy / segments.parquet / fingerprints.pkl / metadata.parquet.
+    La sauvegarde est faite après chaque track — reprise possible en cas d'interruption.
     Aucun MP3 n'est écrit dans data/raw/.
     """
     torch.set_num_threads(4)
@@ -201,10 +317,23 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     hop_s   = config.SEGMENT_HOP_S
     min_win = config.SEGMENT_MIN_WIN
 
-    # Sauvegarder la source pour l'affichage dans build_segment_embeddings.py
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
-    (PROCESSED_DIR / "source.txt").write_text(", ".join(csv_sources))
+
+    emb_path  = FEATURES_DIR / f"embeddings_{method}.npy"
+    seg_path  = FEATURES_DIR / f"segments_{method}.parquet"
+    fp_path   = FEATURES_DIR / "fingerprints.pkl"
+    meta_path = PROCESSED_DIR / "metadata.parquet"
+
+    # Charger les fingerprints existants pour éviter de les recalculer
+    existing_fp: dict = {}
+    if fp_path.exists():
+        try:
+            with open(fp_path, "rb") as f:
+                existing_fp = pickle.load(f)
+        except (EOFError, pickle.UnpicklingError):
+            console.print("[yellow]⚠ fingerprints.pkl corrompu — réinitialisé.[/yellow]")
+            existing_fp = {}
 
     console.print(Panel(
         f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
@@ -215,14 +344,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
         expand=False
     ))
 
-    segments_rows   = []
-    embeddings_list = []
-    fingerprints    = {}
-    metadata_rows   = []
-    segment_id      = 0
-
-    batch_segments  = []
-    batch_meta      = []
+    saved_count = 0
 
     progress_columns = [
         SpinnerColumn(),
@@ -239,152 +361,186 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
             if config.PROGRESS_DATASET else None
         )
 
-        for track in tracks:
-            artist = track["artist"]
-            title  = track["title"]
-            label  = f"{artist} — {title}"
+        # Tâche Rich pour afficher les téléchargements en cours
+        dl_status_task = progress.add_task("[yellow]⬇ En attente...", total=None)
 
-            # Téléchargement en RAM
-            waveform, sr = download_to_ram(artist, title, load_sr)
+        def _download_task(track: dict) -> tuple:
+            """
+            Télécharge uniquement le MP3 via subprocess — PAS de librosa/numpy ici.
+            librosa.load sera appelé dans le thread principal pour éviter les deadlocks.
+            """
+            tmpdir, mp3_path, url, dl_error = _download_mp3(track["artist"], track["title"])
+            return tmpdir, mp3_path, url, track, dl_error
 
-            if waveform is None:
-                console.print(f"[red]  ✗ Échec : {label}[/red]")
-                if dataset_task is not None:
-                    progress.advance(dataset_task)
-                continue
+        # Sliding window : on ne soumet que DOWNLOAD_WORKERS+2 futures à la fois
+        # pour ne pas bombarder YouTube avec toutes les requêtes d'un coup.
+        from concurrent.futures import wait as fut_wait, FIRST_COMPLETED
 
-            # track_id stable basé sur le contenu audio
-            track_id = hashlib.md5(waveform.tobytes()[:8192]).hexdigest()
+        lookahead  = config.DOWNLOAD_WORKERS + 2
+        track_iter = iter(tracks)
 
-            metadata_rows.append({
-                "track_id": track_id,
-                "title":    title,
-                "artist":   artist,
-                "source":   track["source"],
-                "duration": len(waveform) / sr,
-            })
+        dl_pool = ThreadPoolExecutor(max_workers=config.DOWNLOAD_WORKERS)
+        try:
+            # Queue initiale
+            pending: set = set()
+            for t in track_iter:
+                pending.add(dl_pool.submit(_download_task, t))
+                if len(pending) >= lookahead:
+                    break
 
-            # Fingerprint (toujours à SAMPLE_RATE)
-            if sr != config.SAMPLE_RATE:
-                waveform_fp = librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
-            else:
-                waveform_fp = waveform
-            fingerprints[track_id] = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+            while pending:
+                finished, pending = fut_wait(pending, return_when=FIRST_COMPLETED)
 
-            # Segmentation
-            segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
+                # Remplir à nouveau jusqu'au lookahead
+                slots = lookahead - len(pending)
+                for t in track_iter:
+                    pending.add(dl_pool.submit(_download_task, t))
+                    slots -= 1
+                    if slots <= 0:
+                        break
 
-            track_task = (
-                progress.add_task(f"[green]{label[:50]}", total=len(segs))
-                if config.PROGRESS_TRACK else None
-            )
+                for future in finished:
+                    tmpdir, mp3_path, youtube_url, track, dl_error = future.result()
+                    artist = track["artist"]
+                    title  = track["title"]
+                    label  = f"{artist} — {title}"
 
-            for start_s, seg in segs:
-                if method == "muq":
-                    batch_segments.append(seg)
-                    batch_meta.append((track_id, float(start_s)))
+                    if mp3_path is None:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        console.print(f"[red]  ✗ [{ts}] {label} — {dl_error}[/red]")
+                        if dataset_task is not None:
+                            progress.advance(dataset_task)
+                        continue
 
-                    if len(batch_segments) >= batch_size:
-                        embs = muq_batch_embeddings(
-                            batch_segments, sr=sr, model_name=config.MUQ_MODEL_NAME
+                    # Mise à jour affichage track en cours
+                    progress.update(dl_status_task, description=f"[yellow]⬇ {label[:55]}")
+
+                    # librosa.load dans le thread principal — évite les deadlocks numpy
+                    try:
+                        waveform, sr = librosa.load(mp3_path, sr=load_sr, mono=True)
+                    except Exception:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        console.print(f"[red]  ✗ [{ts}] Échec lecture audio : {label}[/red]")
+                        if dataset_task is not None:
+                            progress.advance(dataset_task)
+                        continue
+                    finally:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+
+                    # track_id stable basé sur (artist, title)
+                    track_id = hashlib.md5(
+                        f"{artist.lower()}_{title.lower()}".encode()
+                    ).hexdigest()
+
+                    metadata_row = {
+                        "track_id":         track_id,
+                        "title":            title,
+                        "artist":           artist,
+                        "duration":         len(waveform) / sr,
+                        "source":           track["source"],
+                        "url":              youtube_url,
+                        "embedded_methods": [method],
+                        "album":            None,
+                        "release_date":     None,
+                        "genre":            None,
+                        "cover_url":        None,
+                    }
+
+                    # Fingerprint — seulement si pas déjà calculé
+                    new_fp: dict = {}
+                    if track_id not in existing_fp:
+                        waveform_fp = (
+                            librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                            if sr != config.SAMPLE_RATE else waveform
                         )
-                        for i in range(embs.shape[0]):
-                            embeddings_list.append(embs[i])
-                            t_id, st = batch_meta[i]
-                            segments_rows.append({
-                                "segment_id": segment_id,
-                                "track_id":   t_id,
-                                "start_s":    st
-                            })
-                            segment_id += 1
-                        batch_segments.clear()
-                        batch_meta.clear()
-                else:
-                    emb = embed_segment(
-                        seg, sr, method=method,
-                        clap_model_name=config.CLAP_MODEL_NAME,
-                        muq_model_name=config.MUQ_MODEL_NAME
+                        new_fp[track_id] = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+
+                    # Segmentation + embedding
+                    segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
+
+                    track_task = (
+                        progress.add_task(f"[green]{label[:50]}", total=len(segs))
+                        if config.PROGRESS_TRACK else None
                     )
-                    embeddings_list.append(emb)
-                    segments_rows.append({
-                        "segment_id": segment_id,
-                        "track_id":   track_id,
-                        "start_s":    float(start_s)
-                    })
-                    segment_id += 1
 
-                if track_task is not None:
-                    progress.advance(track_task)
+                    track_embeddings: list = []
+                    track_segments:   list = []
+                    local_id = 0
 
-            if track_task is not None:
-                progress.remove_task(track_task)
-            if dataset_task is not None:
-                progress.advance(dataset_task)
+                    if method == "muq":
+                        for i in range(0, len(segs), batch_size):
+                            batch = segs[i : i + batch_size]
+                            embs  = muq_batch_embeddings(
+                                [seg for _, seg in batch], sr=sr,
+                                model_name=config.MUQ_MODEL_NAME,
+                            )
+                            for j, (start_s, _) in enumerate(batch):
+                                track_embeddings.append(embs[j])
+                                track_segments.append({
+                                    "segment_id": local_id,
+                                    "track_id":   track_id,
+                                    "start_s":    float(start_s),
+                                })
+                                local_id += 1
+                            if track_task is not None:
+                                progress.advance(track_task, advance=len(batch))
+                    else:
+                        for start_s, seg in segs:
+                            emb = embed_segment(
+                                seg, sr, method=method,
+                                clap_model_name=config.CLAP_MODEL_NAME,
+                                muq_model_name=config.MUQ_MODEL_NAME,
+                            )
+                            track_embeddings.append(emb)
+                            track_segments.append({
+                                "segment_id": local_id,
+                                "track_id":   track_id,
+                                "start_s":    float(start_s),
+                            })
+                            local_id += 1
+                            if track_task is not None:
+                                progress.advance(track_task)
 
-            time.sleep(0.5)  # pause pour éviter le rate-limiting YouTube
+                    if track_task is not None:
+                        progress.remove_task(track_task)
 
-    # Flush dernier batch MuQ incomplet
-    if method == "muq" and len(batch_segments) > 0:
-        embs = muq_batch_embeddings(batch_segments, sr=load_sr, model_name=config.MUQ_MODEL_NAME)
-        for i in range(embs.shape[0]):
-            embeddings_list.append(embs[i])
-            t_id, st = batch_meta[i]
-            segments_rows.append({"segment_id": segment_id, "track_id": t_id, "start_s": st})
-            segment_id += 1
+                    # Sauvegarde immédiate sur disque
+                    if track_embeddings:
+                        _save_track(
+                            track_id, method,
+                            track_embeddings, track_segments,
+                            new_fp, metadata_row, existing_fp,
+                            emb_path, seg_path, fp_path, meta_path,
+                        )
+                        saved_count += 1
 
-    if not embeddings_list:
+                    if dataset_task is not None:
+                        progress.advance(dataset_task)
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interruption — annulation des téléchargements en cours...[/yellow]")
+            for f in pending:
+                f.cancel()
+            dl_pool.shutdown(wait=False, cancel_futures=True)
+            console.print(f"[green]{saved_count} track(s) déjà sauvegardé(s).[/green]")
+            sys.exit(0)
+        finally:
+            dl_pool.shutdown(wait=False)
+
+    if saved_count == 0:
         console.print("[red]Aucun morceau traité — pipeline annulé.[/red]")
         sys.exit(1)
 
-    # Fusion avec les données existantes
-    emb_path = FEATURES_DIR / f"embeddings_{method}.npy"
-    seg_path = FEATURES_DIR / f"segments_{method}.parquet"
-    fp_path  = FEATURES_DIR / "fingerprints.pkl"
-    meta_path = PROCESSED_DIR / "metadata.parquet"
-
-    new_emb = np.vstack(embeddings_list).astype(np.float32)
-
-    if emb_path.exists():
-        existing_emb = np.load(emb_path)
-        # Décaler les segment_id pour éviter les collisions
-        offset = len(existing_emb)
-        for row in segments_rows:
-            row["segment_id"] += offset
-        emb_mat = np.vstack([existing_emb, new_emb]).astype(np.float32)
-    else:
-        emb_mat = new_emb
-
-    np.save(emb_path, emb_mat)
-
-    df_new_seg = pd.DataFrame(segments_rows)
-    if seg_path.exists():
-        df_existing_seg = pd.read_parquet(seg_path)
-        df_segments = pd.concat([df_existing_seg, df_new_seg], ignore_index=True)
-    else:
-        df_segments = df_new_seg
-    df_segments.to_parquet(seg_path, index=False)
-
-    existing_fp = {}
-    if fp_path.exists():
-        with open(fp_path, "rb") as f:
-            existing_fp = pickle.load(f)
-    existing_fp.update(fingerprints)
-    with open(fp_path, "wb") as f:
-        pickle.dump(existing_fp, f)
-
-    df_new_meta = pd.DataFrame(metadata_rows)
-    if meta_path.exists():
-        df_existing_meta = pd.read_parquet(meta_path)
-        df_meta = pd.concat([df_existing_meta, df_new_meta], ignore_index=True)
-    else:
-        df_meta = df_new_meta
-    df_meta.to_parquet(meta_path, index=False)
+    # Résumé final
+    total_meta = len(pd.read_parquet(meta_path)) if meta_path.exists() else 0
+    total_seg  = len(pd.read_parquet(seg_path))  if seg_path.exists()  else 0
+    emb_dim    = np.load(emb_path).shape[1]      if emb_path.exists()  else 0
 
     console.print(Panel(
-        f"[bold]Nouveaux tracks  :[/bold] {len(metadata_rows)}\n"
-        f"[bold]Total en base    :[/bold] {len(df_meta)}\n"
-        f"[bold]Total segments   :[/bold] {len(df_segments)}\n"
-        f"[bold]Embedding dim    :[/bold] {emb_mat.shape[1]}\n"
+        f"[bold]Nouveaux tracks  :[/bold] {saved_count}\n"
+        f"[bold]Total en base    :[/bold] {total_meta}\n"
+        f"[bold]Total segments   :[/bold] {total_seg}\n"
+        f"[bold]Embedding dim    :[/bold] {emb_dim}\n"
         f"[bold]Fingerprints     :[/bold] {len(existing_fp)} tracks",
         title="[bold green]Embeddings + Fingerprints — OK[/bold green]",
         expand=False
@@ -444,43 +600,37 @@ def download_kaggle_csvs() -> None:
 def load_already_processed(method: str) -> set[tuple[str, str]]:
     """
     Retourne l'ensemble des (artist, title) déjà traités POUR LA MÉTHODE DONNÉE.
-    Vérifie segments_{method}.parquet et non metadata.parquet — un morceau peut
-    être dans metadata sans avoir ses embeddings pour toutes les méthodes.
+    Source de vérité : colonne embedded_methods dans metadata.parquet.
+    Un morceau est ignoré si et seulement si method est dans sa liste embedded_methods.
     """
-    seg_path  = FEATURES_DIR / f"segments_{method}.parquet"
     meta_path = PROCESSED_DIR / "metadata.parquet"
 
-    if not seg_path.exists() or not meta_path.exists():
+    if not meta_path.exists():
         return set()
 
-    # track_ids déjà indexés pour cette méthode
-    seg_ids = set(pd.read_parquet(seg_path)["track_id"].unique())
-
-    # Correspondance track_id → (artist, title) via metadata
     df_meta = pd.read_parquet(meta_path)
+
+    if "embedded_methods" not in df_meta.columns:
+        return set()
     if "artist" not in df_meta.columns or "title" not in df_meta.columns:
         return set()
 
     return {
         (str(r.artist).lower(), str(r.title).lower())
         for r in df_meta.itertuples()
-        if r.track_id in seg_ids
+        if hasattr(r.embedded_methods, '__iter__') and not isinstance(r.embedded_methods, str) and method in r.embedded_methods
     }
 
 
 @click.command()
 @click.option("--csv", "csv_paths", multiple=True,
               help="Fichier CSV ou dossier. Répétable. Si absent, utilise tous les CSV Kaggle.")
-@click.option("--store-audio", is_flag=True, default=False,
-              help="Sauvegarder les MP3 dans data/raw/ (ancien comportement).")
-def main(csv_paths: tuple[str], store_audio: bool) -> None:
+def main(csv_paths: tuple[str]) -> None:
     """
-    Lit un ou plusieurs CSV Kaggle Spotify, télécharge l'audio et construit la base.
+    Lit un ou plusieurs CSV Kaggle Spotify, télécharge l'audio en RAM et construit la base.
     Si --csv est absent, utilise automatiquement tous les CSV Kaggle disponibles.
     Les morceaux déjà traités pour la méthode active sont automatiquement ignorés.
     """
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-
     # Collecter les fichiers CSV
     if not csv_paths:
         download_kaggle_csvs()
@@ -524,24 +674,7 @@ def main(csv_paths: tuple[str], store_audio: bool) -> None:
     console.print(f"\n[bold]{len(all_tracks)} nouveaux morceaux à traiter.[/bold]\n")
 
     csv_sources = [f.name for f in csv_files]
-
-    if store_audio:
-        success = 0
-        for i, track in enumerate(all_tracks, 1):
-            console.print(f"[{i}/{len(all_tracks)}] {track['artist']} — {track['title']}")
-            if download_to_disk(track["artist"], track["title"], RAW_DIR):
-                success += 1
-            time.sleep(1.0)
-
-        console.print(f"\n{success}/{len(all_tracks)} morceaux téléchargés dans {RAW_DIR}/")
-        if success == 0:
-            sys.exit(1)
-
-        run_step("1/3 — Métadonnées",  [sys.executable, "src/data_utils/build_metadata.py"])
-        run_step("2/3 — Embeddings",   [sys.executable, "scripts/build_segment_embeddings.py"])
-        run_step("3/3 — Index FAISS",  [sys.executable, "src/index/build_index.py"])
-    else:
-        process_in_ram(all_tracks, csv_sources)
+    process_in_ram(all_tracks, csv_sources)
 
 
 if __name__ == "__main__":

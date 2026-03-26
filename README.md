@@ -14,16 +14,22 @@ Système de reconnaissance musicale inspiré de Shazam. À partir d'un extrait a
 # 1. Alimenter la base (télécharge + calcule embeddings + fingerprints)
 python scripts/download_music.py
 
-# 2. Identifier un morceau
+# 2. Vérifier l'intégrité des données
+python scripts/check_data.py
+
+# 3. Supprimer les tracks problématiques et les re-télécharger
+python scripts/check_data.py --purge
+
+# 4. Reconstruire l'index FAISS
+python src/index/build_index.py
+
+# 5. Identifier un morceau
 python -c "
 from src.retrieval.query_pipeline import identify_track
 results = identify_track('mon_audio.mp3', method='mfcc')
 for rank, (track_id, score) in enumerate(results, 1):
     print(f'{rank}. {track_id} — {score:.4f}')
 "
-
-# 3. Reconstruire l'index FAISS
-python src/index/build_index.py
 ```
 
 ---
@@ -158,14 +164,16 @@ python scripts/download_music.py
 python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
 # Plusieurs CSV spécifiques
-python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-france.csv --csv data/kaggle/data/spotify-streaming-top-50-usa.csv
+python scripts/download_music.py \
+  --csv data/kaggle/data/spotify-streaming-top-50-france.csv \
+  --csv data/kaggle/data/spotify-streaming-top-50-usa.csv
 
 # Tous les CSV d'un dossier
 python scripts/download_music.py --csv data/kaggle/data/
 ```
 
 > **Changer de méthode :** modifier `EMBEDDING_METHOD` dans `config.py` et relancer.
-> Les morceaux déjà traités en MFCC ne seront pas ignorés pour CLAP — le script détecte la méthode.
+> Les morceaux déjà traités en MFCC ne seront pas re-traités pour MFCC, mais seront traités pour CLAP — le script détecte la méthode indépendamment.
 
 ### Ordre des étapes internes
 
@@ -179,6 +187,54 @@ Pour chaque morceau :
   6. Suppression de l'audio
 → Construction de l'index FAISS
 ```
+
+---
+
+## Vérifier et nettoyer les données — `scripts/check_data.py`
+
+Vérifie la cohérence des données générées par `download_music.py` et supprime les tracks problématiques.
+
+```bash
+# Vérifier toutes les méthodes disponibles
+python scripts/check_data.py
+
+# Vérifier une méthode spécifique
+python scripts/check_data.py --method mfcc
+
+# Supprimer les tracks problématiques (avec confirmation)
+python scripts/check_data.py --purge
+
+# Supprimer sans demander confirmation
+python scripts/check_data.py --purge --yes
+
+# Combiner méthode + purge
+python scripts/check_data.py --method mfcc --purge
+```
+
+### Checks effectués
+
+| Code | Type | Description |
+|------|------|-------------|
+| C1 | Critique | Dimension des embeddings inattendue |
+| C2 | Critique | NaN ou Inf dans les embeddings (résultats FAISS corrompus) |
+| C3 | Critique | Désynchronisation embeddings.npy ↔ segments.parquet |
+| C4 | Critique | segment_ids dupliqués |
+| C5 | Critique | FAISS index désynchronisé (relancer build_index.py) |
+| C6 | Critique | Segments sans entrée dans metadata (orphelins) |
+| C7 | Critique | Embedding incomplet (< 80% des segments attendus) |
+| Q1 | Qualité | Durée aberrante (≤ 0s ou > 10min) |
+| Q2 | Qualité | Segment dont le start_s dépasse la durée du track |
+| Q3 | Qualité | Fingerprint vide (0 hash) |
+| Q4 | Qualité | Fingerprint anormalement pauvre (outlier IQR) |
+| FP | Qualité | Tracks sans fingerprint (Stage 2 inopérant) |
+
+### Que fait `--purge` ?
+
+Pour chaque track flaggé par un warning :
+1. Ses segments sont retirés de `segments_{method}.parquet`
+2. Ses embeddings sont retirés de `embeddings_{method}.npy` (renumérotation automatique)
+3. La méthode est retirée de `embedded_methods` dans `metadata.parquet` → le track sera **re-téléchargé** au prochain `download_music.py`
+4. Son fingerprint est supprimé de `fingerprints.pkl`
 
 ---
 
