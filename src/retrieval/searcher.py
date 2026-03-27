@@ -50,6 +50,15 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
         )
 
     index = faiss.read_index(str(index_path))
+
+    # L'ordre des segments est sauvegardé dans INDEX_DIR par build_index.py
+    # (reconstruit depuis ChromaDB à chaque build — toujours synchronisé avec l'index FAISS)
+    seg_path = Path(f"{config.INDEX_DIR}/segments_{method}.parquet")
+    if not seg_path.exists():
+        raise FileNotFoundError(
+            f"Fichier d'ordre des segments manquant : {seg_path}\n"
+            f"Lance d'abord : python src/index/build_index.py"
+        )
     segments = pd.read_parquet(str(seg_path))
 
     return (index, segments)

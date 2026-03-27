@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import sqlite3
 from pathlib import Path
 
 # Active le fallback CPU pour les opérations non supportées sur MPS (Apple Silicon).
@@ -131,24 +132,27 @@ def identify_track(
         waveform_fp = waveform
     query_fp = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
 
-    # Charger les fingerprints pré-calculés si disponibles (évite de recharger les MP3)
-    fp_path = Path(config.FINGERPRINTS_PATH)
-    stored_fps = None
-    if fp_path.exists():
-        with open(fp_path, "rb") as f:
-            stored_fps = pickle.load(f)
+    # Fingerprints : chargement depuis SQLite uniquement pour les candidats
+    # (plus efficace que charger tout le fichier — on ne lit que ~20 lignes sur 3000)
+    fp_db = Path(config.FINGERPRINTS_DB)
+
+    def _get_fp(track_id: str) -> set | None:
+        if not fp_db.exists():
+            return None
+        with sqlite3.connect(fp_db) as conn:
+            row = conn.execute(
+                "SELECT hashes FROM fingerprints WHERE track_id = ?", (track_id,)
+            ).fetchone()
+        return pickle.loads(row[0]) if row else None
 
     def process_candidate(candidate):
-        """Récupère le fingerprint d'un candidat (depuis le cache ou en rechargeant l'audio)."""
+        """Récupère le fingerprint d'un candidat depuis SQLite."""
         track_id, score_faiss = candidate
-        if stored_fps is not None and track_id in stored_fps:
-            # Fingerprint pré-calculé disponible — pas besoin de recharger l'audio
-            candidate_fp = stored_fps[track_id]
-        else:
-            # Fallback : recharger l'audio depuis le disque
-            path = segments[segments["track_id"] == track_id].iloc[0]["path"]
-            candidate_waveform, _ = load_audio(path, target_sr=config.SAMPLE_RATE)
-            candidate_fp = extract_fingerprint(candidate_waveform, config.SAMPLE_RATE)
+        candidate_fp = _get_fp(track_id)
+        if candidate_fp is None:
+            # Fingerprint manquant — les MP3 ne sont jamais stockés sur disque.
+            # Score neutre : on garde le classement FAISS intact.
+            return (track_id, score_faiss)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
         return (track_id, score_faiss * score_fp)
 

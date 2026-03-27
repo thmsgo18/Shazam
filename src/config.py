@@ -19,7 +19,8 @@ PROCESSED_DIR        = "data/processed"
 METADATA_PATH        = "data/processed/metadata.parquet"
 FEATURES_DIR         = "data/features"
 INDEX_DIR            = "data/index"
-FINGERPRINTS_PATH    = "data/features/fingerprints.pkl"
+CHROMA_DIR           = "data/chroma"
+FINGERPRINTS_DB      = "data/features/fingerprints.db"
 
 # Audio
 SAMPLE_RATE = 22050

@@ -33,6 +33,7 @@ import pickle
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -42,7 +43,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+# Évite les deadlocks librosa/numpy/OpenBLAS quand un ThreadPoolExecutor tourne en parallèle
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+import chromadb
 import click
 import librosa
 import numpy as np
@@ -65,6 +70,104 @@ from src.features.fingerprint import extract_fingerprint
 
 FEATURES_DIR = Path("data/features")
 PROCESSED_DIR = Path("data/processed")
+
+
+# ===========================================================================
+# Fingerprints — stockage SQLite
+# ===========================================================================
+
+def _fp_init(db_path: Path) -> None:
+    """Crée la table fingerprints si elle n'existe pas encore."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fingerprints (
+                track_id TEXT PRIMARY KEY,
+                hashes   BLOB    NOT NULL,
+                n_hashes INTEGER NOT NULL
+            )
+        """)
+
+
+def _fp_load_ids(db_path: Path) -> set[str]:
+    """Retourne l'ensemble des track_ids qui ont déjà un fingerprint."""
+    if not db_path.exists():
+        return set()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT track_id FROM fingerprints").fetchall()
+    return {r[0] for r in rows}
+
+
+def _fp_save(db_path: Path, track_id: str, hashes: set) -> None:
+    """Insère ou remplace le fingerprint d'un track (atomique par SQLite)."""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?)",
+            (track_id, pickle.dumps(hashes), len(hashes)),
+        )
+
+
+def _fp_delete(db_path: Path, track_ids: set[str]) -> int:
+    """Supprime les fingerprints d'un ensemble de tracks. Retourne le nombre supprimé."""
+    if not db_path.exists() or not track_ids:
+        return 0
+    with sqlite3.connect(db_path) as conn:
+        placeholders = ",".join("?" * len(track_ids))
+        cur = conn.execute(
+            f"DELETE FROM fingerprints WHERE track_id IN ({placeholders})",
+            list(track_ids),
+        )
+    return cur.rowcount
+
+
+def _fp_migrate_from_pkl(pkl_path: Path, db_path: Path) -> int:
+    """
+    Migration one-shot : importe fingerprints.pkl dans fingerprints.db.
+    Appelée automatiquement au démarrage si le .pkl existe et le .db non.
+    Retourne le nombre de fingerprints migrés.
+    """
+    try:
+        with open(pkl_path, "rb") as f:
+            old = pickle.load(f)
+    except Exception:
+        return 0
+    _fp_init(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO fingerprints VALUES (?, ?, ?)",
+            [(tid, pickle.dumps(fp), len(fp)) for tid, fp in old.items()],
+        )
+    return len(old)
+
+
+# ===========================================================================
+# Écriture atomique — metadata.parquet
+# ===========================================================================
+
+def _atomic_write_pickle(path: Path, obj: object) -> None:
+    """Écrit un fichier pickle de manière atomique (temp file + rename).
+    Garantit qu'en cas de crash pendant l'écriture, l'ancien fichier reste intact.
+    """
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            pickle.dump(obj, f)
+        os.replace(tmp_path, path)  # atomique sur tous les OS
+    except Exception:
+        os.unlink(tmp_path)
+        raise
+
+
+def _atomic_write_parquet(path: Path, df) -> None:
+    """Écrit un fichier parquet de manière atomique (temp file + rename)."""
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    os.close(tmp_fd)
+    try:
+        df.to_parquet(tmp_path, index=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        os.unlink(tmp_path)
+        raise
 
 POSSIBLE_TITLE_COLS  = ["track_name", "name", "title", "song", "track"]
 POSSIBLE_ARTIST_COLS = ["artist_name", "artists", "artist", "performer", "track_artist"]
@@ -125,6 +228,17 @@ def load_tracks_from_csv(csv_path: Path) -> list[dict]:
 # Téléchargement
 # ===========================================================================
 
+def _kill_proc(proc: subprocess.Popen) -> None:
+    """Tue un subprocess de façon propre sur Unix (groupe de processus) et Windows."""
+    if sys.platform == "win32":
+        proc.kill()
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            proc.kill()
+
+
 def _download_mp3(
     artist: str, title: str, retries: int = 3
 ) -> tuple[str, str, str, None] | tuple[None, None, None, str]:
@@ -153,17 +267,20 @@ def _download_mp3(
             tmpdir = tempfile.mkdtemp()
             proc = None
             try:
-                # start_new_session=True : yt-dlp + ffmpeg dans le même groupe de processus
-                # → on peut tout tuer d'un coup en cas de timeout
-                proc = subprocess.Popen(
-                    cmd, cwd=tmpdir,
-                    stderr=subprocess.PIPE,
-                    start_new_session=True,
-                )
+                # Sur Unix : start_new_session met yt-dlp + ffmpeg dans le même groupe
+                # → on peut tout tuer d'un coup en cas de timeout.
+                # Sur Windows : start_new_session n'existe pas, on utilise CREATE_NEW_PROCESS_GROUP.
+                _is_windows = sys.platform == "win32"
+                popen_kwargs: dict = {"cwd": tmpdir, "stderr": subprocess.PIPE}
+                if _is_windows:
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    popen_kwargs["start_new_session"] = True
+                proc = subprocess.Popen(cmd, **popen_kwargs)
                 try:
                     _, stderr_bytes = proc.communicate(timeout=45)
                 except subprocess.TimeoutExpired:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    _kill_proc(proc)
                     proc.wait()
                     shutil.rmtree(tmpdir, ignore_errors=True)
                     last_reason = "timeout"
@@ -198,7 +315,7 @@ def _download_mp3(
             except Exception as e:
                 if proc is not None:
                     try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                        _kill_proc(proc)
                     except Exception:
                         pass
                 shutil.rmtree(tmpdir, ignore_errors=True)
@@ -217,87 +334,58 @@ def _save_track(
     method: str,
     track_embeddings: list,
     track_segments: list[dict],
-    new_fp: dict,
+    new_fp_hashes: set | None,   # set de hashes, ou None si déjà calculé
     metadata_row: dict,
-    existing_fp: dict,
-    emb_path: Path,
-    seg_path: Path,
-    fp_path: Path,
+    collection,                  # ChromaDB collection
+    fp_db: Path,                 # SQLite fingerprints.db
     meta_path: Path,
 ) -> None:
     """
-    Sauvegarde un track sur disque immédiatement (append).
-    Si le track_id existe déjà (crash partiel précédent), ses anciennes données
-    sont supprimées et réécrites proprement — jamais de doublon.
+    Sauvegarde un track immédiatement dans ChromaDB + SQLite + metadata.
+    Si le track_id existe déjà (crash partiel précédent), ses anciens segments
+    sont supprimés et réécrits proprement — jamais de doublon ni de décalage.
     """
     new_emb = np.vstack(track_embeddings).astype(np.float32)
 
-    # Charger embeddings existants (avec gestion corruption)
-    if emb_path.exists():
-        try:
-            existing_emb = np.load(emb_path)
-        except Exception:
-            console.print("[yellow]⚠ embeddings.npy corrompu — réinitialisé.[/yellow]")
-            existing_emb = np.empty((0, new_emb.shape[1]), dtype=np.float32)
-    else:
-        existing_emb = np.empty((0, new_emb.shape[1]), dtype=np.float32)
+    # Supprimer les anciens segments si crash partiel précédent
+    existing = collection.get(where={"track_id": {"$eq": track_id}})
+    if existing["ids"]:
+        collection.delete(ids=existing["ids"])
 
-    # Charger segments existants
-    if seg_path.exists():
-        df_seg = pd.read_parquet(seg_path)
-    else:
-        df_seg = pd.DataFrame(columns=["segment_id", "track_id", "start_s"])
+    # Ajouter les nouveaux segments avec des IDs stables (track_id + index local)
+    collection.add(
+        embeddings=new_emb.tolist(),
+        ids=[f"{track_id}_{i}" for i in range(len(new_emb))],
+        metadatas=[
+            {"track_id": track_id, "start_s": float(s["start_s"])}
+            for s in track_segments
+        ],
+    )
 
-    # Écrasement si le track existait déjà partiellement (crash précédent)
-    if track_id in df_seg["track_id"].values:
-        old_seg_ids = df_seg[df_seg["track_id"] == track_id]["segment_id"].values
-        df_seg = df_seg[df_seg["track_id"] != track_id].reset_index(drop=True)
-        keep = np.ones(len(existing_emb), dtype=bool)
-        valid_ids = old_seg_ids[old_seg_ids < len(existing_emb)]  # sécurité bounds
-        keep[valid_ids] = False
-        existing_emb = existing_emb[keep]
-        df_seg["segment_id"] = range(len(df_seg))
+    # Fingerprint — SQLite (atomique nativement)
+    if new_fp_hashes is not None:
+        _fp_save(fp_db, track_id, new_fp_hashes)
 
-    offset = len(existing_emb)
-
-    # Assigner les nouveaux segment_ids
-    df_new_seg = pd.DataFrame([
-        {"segment_id": offset + i, "track_id": s["track_id"], "start_s": s["start_s"]}
-        for i, s in enumerate(track_segments)
-    ])
-
-    # Écrire segments EN PREMIER — source de vérité pour l'overwrite au prochain run
-    df_seg = pd.concat([df_seg, df_new_seg], ignore_index=True)
-    df_seg.to_parquet(seg_path, index=False)
-
-    # Puis embeddings
-    emb_mat = np.vstack([existing_emb, new_emb]).astype(np.float32)
-    np.save(emb_path, emb_mat)
-
-    # Fingerprints
-    existing_fp.update(new_fp)
-    with open(fp_path, "wb") as f:
-        pickle.dump(existing_fp, f)
-
-    # Metadata — mise à jour embedded_methods si le track existe déjà
+    # Metadata — écriture atomique
     if meta_path.exists():
         df_meta = pd.read_parquet(meta_path)
         if track_id in set(df_meta["track_id"]):
             idx = df_meta.index[df_meta["track_id"] == track_id][0]
-            current = df_meta.at[idx, "embedded_methods"] or []
+            current = df_meta.at[idx, "embedded_methods"]
+            current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
             if method not in current:
-                df_meta.at[idx, "embedded_methods"] = list(current) + [method]
+                df_meta.at[idx, "embedded_methods"] = current + [method]
         else:
             df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
     else:
         df_meta = pd.DataFrame([metadata_row])
-    df_meta.to_parquet(meta_path, index=False)
+    _atomic_write_parquet(meta_path, df_meta)
 
 
 def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     """
     Pour chaque morceau : télécharge en RAM, calcule embeddings + fingerprint,
-    sauvegarde embeddings.npy / segments.parquet / fingerprints.pkl / metadata.parquet.
+    sauvegarde dans ChromaDB (embeddings + segments) / fingerprints.pkl / metadata.parquet.
     La sauvegarde est faite après chaque track — reprise possible en cas d'interruption.
     Aucun MP3 n'est écrit dans data/raw/.
     """
@@ -320,20 +408,28 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    emb_path  = FEATURES_DIR / f"embeddings_{method}.npy"
-    seg_path  = FEATURES_DIR / f"segments_{method}.parquet"
-    fp_path   = FEATURES_DIR / "fingerprints.pkl"
+    fp_db     = FEATURES_DIR / "fingerprints.db"
     meta_path = PROCESSED_DIR / "metadata.parquet"
 
-    # Charger les fingerprints existants pour éviter de les recalculer
-    existing_fp: dict = {}
-    if fp_path.exists():
-        try:
-            with open(fp_path, "rb") as f:
-                existing_fp = pickle.load(f)
-        except (EOFError, pickle.UnpicklingError):
-            console.print("[yellow]⚠ fingerprints.pkl corrompu — réinitialisé.[/yellow]")
-            existing_fp = {}
+    # Migration automatique fingerprints.pkl → fingerprints.db (one-shot)
+    fp_pkl = FEATURES_DIR / "fingerprints.pkl"
+    if fp_pkl.exists() and not fp_db.exists():
+        console.print("[yellow]Migration fingerprints.pkl → fingerprints.db…[/yellow]")
+        n = _fp_migrate_from_pkl(fp_pkl, fp_db)
+        console.print(f"[green]✓ {n} fingerprints migrés.[/green]")
+
+    # Initialiser la DB (crée la table si première utilisation)
+    _fp_init(fp_db)
+
+    # Charger les track_ids déjà fingerprinted (set léger, pas les données)
+    existing_fp_ids: set[str] = _fp_load_ids(fp_db)
+
+    # Initialiser ChromaDB — collection par méthode d'embedding
+    chroma_client = chromadb.PersistentClient(path=config.CHROMA_DIR)
+    collection = chroma_client.get_or_create_collection(
+        name=method,
+        metadata={"hnsw:space": "cosine"},
+    )
 
     console.print(Panel(
         f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
@@ -446,14 +542,15 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                         "cover_url":        None,
                     }
 
-                    # Fingerprint — seulement si pas déjà calculé
-                    new_fp: dict = {}
-                    if track_id not in existing_fp:
+                    # Fingerprint — seulement si pas déjà dans la DB
+                    new_fp_hashes: set | None = None
+                    if track_id not in existing_fp_ids:
                         waveform_fp = (
                             librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
                             if sr != config.SAMPLE_RATE else waveform
                         )
-                        new_fp[track_id] = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+                        new_fp_hashes = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+                        existing_fp_ids.add(track_id)
 
                     # Segmentation + embedding
                     segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
@@ -465,7 +562,6 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
 
                     track_embeddings: list = []
                     track_segments:   list = []
-                    local_id = 0
 
                     if method == "muq":
                         for i in range(0, len(segs), batch_size):
@@ -477,11 +573,9 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                             for j, (start_s, _) in enumerate(batch):
                                 track_embeddings.append(embs[j])
                                 track_segments.append({
-                                    "segment_id": local_id,
-                                    "track_id":   track_id,
-                                    "start_s":    float(start_s),
+                                    "track_id": track_id,
+                                    "start_s":  float(start_s),
                                 })
-                                local_id += 1
                             if track_task is not None:
                                 progress.advance(track_task, advance=len(batch))
                     else:
@@ -493,24 +587,22 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                             )
                             track_embeddings.append(emb)
                             track_segments.append({
-                                "segment_id": local_id,
-                                "track_id":   track_id,
-                                "start_s":    float(start_s),
+                                "track_id": track_id,
+                                "start_s":  float(start_s),
                             })
-                            local_id += 1
                             if track_task is not None:
                                 progress.advance(track_task)
 
                     if track_task is not None:
                         progress.remove_task(track_task)
 
-                    # Sauvegarde immédiate sur disque
+                    # Sauvegarde immédiate dans ChromaDB + SQLite + metadata
                     if track_embeddings:
                         _save_track(
                             track_id, method,
                             track_embeddings, track_segments,
-                            new_fp, metadata_row, existing_fp,
-                            emb_path, seg_path, fp_path, meta_path,
+                            new_fp_hashes, metadata_row,
+                            collection, fp_db, meta_path,
                         )
                         saved_count += 1
 
@@ -533,21 +625,20 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
 
     # Résumé final
     total_meta = len(pd.read_parquet(meta_path)) if meta_path.exists() else 0
-    total_seg  = len(pd.read_parquet(seg_path))  if seg_path.exists()  else 0
-    emb_dim    = np.load(emb_path).shape[1]      if emb_path.exists()  else 0
+    total_seg  = collection.count()
+    sample     = collection.get(limit=1, include=["embeddings"])
+    emb_dim    = len(sample["embeddings"][0]) if sample.get("embeddings") else "?"
 
     console.print(Panel(
         f"[bold]Nouveaux tracks  :[/bold] {saved_count}\n"
         f"[bold]Total en base    :[/bold] {total_meta}\n"
         f"[bold]Total segments   :[/bold] {total_seg}\n"
         f"[bold]Embedding dim    :[/bold] {emb_dim}\n"
-        f"[bold]Fingerprints     :[/bold] {len(existing_fp)} tracks",
+        f"[bold]Fingerprints     :[/bold] {len(existing_fp_ids)} tracks",
         title="[bold green]Embeddings + Fingerprints — OK[/bold green]",
         expand=False
     ))
 
-    # Construction de l'index FAISS
-    run_step("Construction de l'index FAISS", [sys.executable, "src/index/build_index.py"])
 
 
 # ===========================================================================
@@ -667,14 +758,16 @@ def main(csv_paths: tuple[str]) -> None:
     if skipped > 0:
         console.print(f"[yellow]{skipped} morceau(x) ignoré(s) (déjà dans la base)[/yellow]")
 
-    if not all_tracks:
-        console.print("[green]Tous les morceaux sont déjà dans la base. Rien à faire.[/green]")
-        sys.exit(0)
-
-    console.print(f"\n[bold]{len(all_tracks)} nouveaux morceaux à traiter.[/bold]\n")
-
     csv_sources = [f.name for f in csv_files]
-    process_in_ram(all_tracks, csv_sources)
+
+    if not all_tracks:
+        console.print("[green]Tous les morceaux sont déjà dans la base.[/green]")
+    else:
+        console.print(f"\n[bold]{len(all_tracks)} nouveaux morceaux à traiter.[/bold]\n")
+        process_in_ram(all_tracks, csv_sources)
+
+    # Construction de l'index FAISS — toujours à la fin, même si rien de nouveau
+    run_step("Construction de l'index FAISS", [sys.executable, "src/index/build_index.py"])
 
 
 if __name__ == "__main__":
