@@ -149,12 +149,11 @@ def identify_track(
         """Récupère le fingerprint d'un candidat depuis SQLite."""
         track_id, score_faiss = candidate
         candidate_fp = _get_fp(track_id)
-        if candidate_fp is None:
-            # Fingerprint manquant — les MP3 ne sont jamais stockés sur disque.
-            # Score neutre : on garde le classement FAISS intact.
+        if candidate_fp is None or len(candidate_fp) == 0:
+            # Fingerprint manquant ou vide — score neutre : on garde le classement FAISS intact.
             return (track_id, score_faiss)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
-        return (track_id, score_faiss * score_fp)
+        return (track_id, score_faiss * (1.0 + score_fp))
 
     if config.OPT_FINGERPRINT_PARALLEL:
         # Chargement et fingerprinting des candidats en parallèle

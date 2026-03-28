@@ -73,32 +73,28 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
 
 
 
-def fingerprint_similarity(fp1: set[tuple], fp2: set[tuple]) -> float:
+def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> float:
     """
-    Calcule la similarité entre deux fingerprints (similarité de Jaccard).
+    Calcule la similarité entre deux fingerprints (recall-based).
 
-    Score = |fp1 ∩ fp2| / |fp1 ∪ fp2|
+    Score = |fp_query ∩ fp_candidate| / |fp_query|
+
+    On mesure quelle fraction des hashes de la requête (extrait court) se retrouve
+    dans le candidat (morceau entier). Contrairement à Jaccard, ce score n'est pas
+    pénalisé par le fait que le morceau en base est plus long que la requête.
 
     Args:
-        fp1: fingerprint du premier audio.
-        fp2: fingerprint du second audio.
+        fp_query:     fingerprint de l'extrait requête.
+        fp_candidate: fingerprint du morceau en base.
 
     Returns:
-        Score entre 0.0 (aucune ressemblance) et 1.0 (identiques).
+        Score entre 0.0 (aucune ressemblance) et 1.0 (tous les hashes retrouvés).
         Retourne 0.0 si l'un des deux ensembles est vide.
     """
-    # si l'un des deux fingerprints est vide, le score est forcément 0
-    if not fp1 or not fp2:
-        return 0.0
-    
-    # Calcul de l'intersection et de l'union
-    intersection = fp1.intersection(fp2)
-    union = fp1.union(fp2)
-
-    if len(union) == 0:
+    if not fp_query or not fp_candidate:
         return 0.0
 
-    return len(intersection) / len(union)
+    return len(fp_query.intersection(fp_candidate)) / len(fp_query)
 
 
 

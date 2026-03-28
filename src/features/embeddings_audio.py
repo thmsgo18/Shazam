@@ -140,6 +140,51 @@ def clap_embedding(waveform: np.ndarray, sr: int, model_name: str, normalize: bo
 
     return emb
 
+def clap_batch_embeddings(
+    segments: list[np.ndarray],
+    sr: int,
+    model_name: str,
+    normalize: bool = True,
+    eps: float = 1e-10,
+) -> np.ndarray:
+    """
+    Calcule les embeddings CLAP pour un batch de segments en un seul appel GPU.
+    Analogue à muq_batch_embeddings — évite les allers-retours GPU répétés.
+
+    Returns:
+        emb: (B, 512) float32
+    """
+    import torch
+
+    if not segments:
+        return np.zeros((0, 512), dtype=np.float32)
+
+    model, processor, device = _load_clap(model_name=model_name)
+
+    target_sr = int(getattr(processor.feature_extractor, "sampling_rate", sr))
+
+    resampled = []
+    for seg in segments:
+        y = np.asarray(seg, dtype=np.float32)
+        if sr != target_sr:
+            y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+        resampled.append(y)
+
+    inputs = processor(audios=resampled, sampling_rate=target_sr, return_tensors="pt", padding=True)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        audio_features = model.get_audio_features(**inputs)  # (B, 512)
+
+    emb = audio_features.detach().cpu().numpy().astype(np.float32)
+
+    if normalize:
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.maximum(norms, eps)
+
+    return emb
+
+
 # ******************** MuQ : ********************
 
 _MUQ_CACHE = {"model": None, "device": None, "model_name": None}

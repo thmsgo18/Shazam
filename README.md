@@ -15,18 +15,31 @@ Système de reconnaissance musicale inspiré de Shazam. À partir d'un extrait a
 # 1. Alimenter la base (télécharge + calcule embeddings + fingerprints + construit l'index)
 python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
-# 2. Vérifier l'intégrité des données
+# 2. Enrichir les métadonnées (album, genre, date, pochette) via Deezer
+python scripts/enrich_metadata.py
+
+# 3. Télécharger un audio de test
+python scripts/download_test_audio.py "Miley Cyrus Flowers"
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position middle
+
+# 4. Identifier un morceau
+python src/api/app.py "data/raw/mon_audio.mp3"
+python src/api/app.py "data/raw/mon_audio.mp3" --method clap --top 5
+
+# 5. Vérifier l'intégrité des données (vue résumé)
 python scripts/check_data.py
 
-# 3. Supprimer les tracks problématiques
+# 6. Voir le détail des problèmes d'embeddings/fingerprints
+python scripts/check_data.py --details
+
+# 7. Voir les tracks avec métadonnées manquantes
+python scripts/check_data.py --metadata
+
+# 8. Supprimer les tracks problématiques (purge chirurgicale)
 python scripts/check_data.py --purge
 
-# 4. Reconstruire l'index FAISS (si nécessaire)
+# 9. Reconstruire l'index FAISS (si nécessaire)
 python src/index/build_index.py
-
-# 5. Identifier un morceau
-python src/api/app.py mon_audio.mp3
-python src/api/app.py mon_audio.mp3 --method mfcc --top 5
 ```
 
 ---
@@ -156,6 +169,7 @@ Tous les paramètres du projet sont centralisés ici. **Ne modifier que ce fichi
 | `CLAP_MODEL_NAME` | `"laion/clap-htsat-unfused"` | Modèle CLAP (HuggingFace) |
 | `MUQ_MODEL_NAME` | `"OpenMuQ/MuQ-large-msd-iter"` | Modèle MuQ (HuggingFace) |
 | `MUQ_BATCH_SIZE` | `8` | Nombre de segments traités en batch par MuQ |
+| `CLAP_BATCH_SIZE` | `10` | Nombre de segments traités en batch par CLAP (sweet spot MPS = 10, CUDA peut monter plus haut) |
 
 ### Recherche vectorielle
 
@@ -224,12 +238,15 @@ La sauvegarde est faite **après chaque track** dans les trois stores. En cas de
 Pour chaque morceau :
   1. Recherche YouTube via yt-dlp
   2. Téléchargement audio en RAM (dossier temporaire auto-supprimé)
-  3. Calcul du fingerprint → SQLite (fingerprints.db)
-  4. Segmentation + calcul des embeddings (méthode config.EMBEDDING_METHOD)
-  5. Sauvegarde dans ChromaDB (embeddings + métadonnées segment)
-  6. Mise à jour de metadata.parquet (écriture atomique)
+  3. Mesure de la durée à SAMPLE_RATE (22 050 Hz) — indépendante de la méthode d'embedding
+  4. Calcul du fingerprint → SQLite (fingerprints.db)
+  5. Segmentation + calcul des embeddings (méthode config.EMBEDDING_METHOD)
+  6. Sauvegarde dans ChromaDB (embeddings + métadonnées segment)
+  7. Mise à jour de metadata.parquet (écriture atomique)
 → Construction de l'index FAISS depuis ChromaDB
 ```
+
+> **Durée standardisée :** Quelle que soit la méthode active (CLAP charge à 48 kHz, MuQ à 24 kHz, MFCC à 22 kHz), la durée stockée dans `metadata.parquet` est toujours mesurée à `SAMPLE_RATE` (22 050 Hz). Cela garantit une valeur cohérente et stable, indépendante du sample rate d'embedding.
 
 ---
 
@@ -238,26 +255,37 @@ Pour chaque morceau :
 Vérifie la cohérence des données générées par `download_music.py` et supprime les tracks problématiques.
 
 ```bash
-# Vérifier toutes les méthodes disponibles
+# Vue résumé (défaut) : deux blocs — Audio/Embeddings + Complétude métadonnées
 python scripts/check_data.py
 
-# Vérifier une méthode spécifique
-python scripts/check_data.py --method mfcc
+# Filtrer sur une méthode spécifique
+python scripts/check_data.py --method clap
+
+# Détail des problèmes d'embeddings/fingerprints (panels par warning)
+python scripts/check_data.py --details
+
+# Tracks avec métadonnées manquantes ou partielles
+python scripts/check_data.py --metadata
 
 # Supprimer les tracks problématiques (avec confirmation)
 python scripts/check_data.py --purge
+python scripts/check_data.py --details --purge
 
 # Supprimer sans demander confirmation
 python scripts/check_data.py --purge --yes
 
 # Supprimer uniquement les tracks sans fingerprint (pour les recalculer)
 python scripts/check_data.py --purge-missing-fp
-
-# Combiner méthode + purge
-python scripts/check_data.py --method mfcc --purge
 ```
 
-### Checks effectués
+### Vue résumé (défaut)
+
+Affiche deux blocs sans détail :
+
+- **Audio & Embeddings** : par méthode — nombre de segments, tracks couverts, embeddings complets/incomplets, fingerprints (présents / manquants / vides / pauvres), état de l'index FAISS
+- **Complétude des métadonnées** : barre de progression par champ (`album`, `genre`, `release_date`, `cover_url`) + comptage complets / partiels / non trouvés
+
+### Checks effectués (`--details`)
 
 | Code | Type | Description |
 |------|------|-------------|
@@ -269,23 +297,65 @@ python scripts/check_data.py --method mfcc --purge
 | C6b | Critique | Track marqué comme traité dans metadata mais sans segments dans ChromaDB |
 | C7 | Critique | Embedding incomplet (< 80% des segments attendus) |
 | Q1 | Qualité | Durée aberrante (≤ 0s ou > 10min) |
-| Q2 | Qualité | Segment dont le `start_s` dépasse la durée du track |
+| Q2 | Qualité | Segment dont le `start_s` dépasse la durée du track de plus de `SEGMENT_WIN_S` (5s) |
 | Q3 | Qualité | Fingerprint vide (0 hash) |
-| Q4 | Qualité | Fingerprint anormalement pauvre (outlier IQR par tranche de durée) |
+| Q4 | Qualité | Fingerprint anormalement pauvre (outlier IQR par tranche de durée, seuil 2.5×IQR) |
 | FP | Qualité | Tracks sans fingerprint (Stage 2 inopérant pour ces tracks) |
 
-### Que fait `--purge` ?
+Chaque warning affiche la **méthode concernée** entre parenthèses (ex : `(clap)`) — utile quand plusieurs méthodes sont actives.
 
-Pour chaque track flaggé par un warning :
+### Que fait `--purge` ? (purge chirurgicale)
 
-1. Ses segments sont supprimés de **ChromaDB**
-2. Son fingerprint est supprimé de **SQLite** (`fingerprints.db`)
-3. Sa ligne est supprimée de **`metadata.parquet`** → le track sera re-téléchargé au prochain `download_music.py`
-4. L'**index FAISS** + l'order parquet sont supprimés (devenus obsolètes → relancer `build_index.py`)
+La purge est **par méthode**, pas par track entier :
+
+1. Les segments de la méthode purgée sont supprimés de **ChromaDB**
+2. La méthode est retirée de `embedded_methods` dans **`metadata.parquet`**
+3. Si `embedded_methods` devient vide → la ligne est supprimée entièrement + fingerprint supprimé de **SQLite**
+4. Si d'autres méthodes restent → la ligne est conservée (les autres méthodes sont intactes)
+5. L'**index FAISS** de la méthode est supprimé (relancer `build_index.py` après)
+
+Le récap avant confirmation distingue :
+- `✗ (clap)  Artiste — Titre  → supprimé entièrement` : plus aucune méthode active
+- `↺ (clap)  Artiste — Titre  → méthode retirée, autres méthodes conservées` : d'autres méthodes restent
 
 ### Que fait `--purge-missing-fp` ?
 
 Purge uniquement les tracks qui ont des embeddings dans ChromaDB mais pas de fingerprint dans SQLite. Utile pour recalculer les fingerprints manquants sans tout re-télécharger.
+
+---
+
+## Enrichir les métadonnées — `scripts/enrich_metadata.py`
+
+Complète `metadata.parquet` avec les métadonnées musicales (`album`, `genre`, `release_date`, `cover_url`) en interrogeant des APIs publiques. Séparé de `download_music.py` — à lancer après que tous les morceaux sont téléchargés.
+
+```bash
+# Enrichir uniquement les tracks avec au moins un champ vide (défaut)
+python scripts/enrich_metadata.py
+
+# Forcer la mise à jour de tous les tracks (même ceux déjà enrichis)
+python scripts/enrich_metadata.py --force
+```
+
+### Sources utilisées en cascade
+
+1. **Deezer API** (gratuit, sans clé) — recherche par artiste + titre → détails album → genre
+   - Si l'album n'a pas de genre → fallback via les albums de l'artiste
+   - Cascade de recherche : `artiste + titre` → `artiste simplifié + titre` → `artiste simplifié + titre nettoyé`
+2. **MusicBrainz** (fallback) — pour les tracks introuvables sur Deezer (limite : 1 req/s)
+
+### Nettoyage automatique des noms
+
+- `"¥$ & Kanye West & Ty Dolla $ign"` → `"Kanye West"` (premier artiste, suppression symboles)
+- `"Calling (Spider-Man: Across the Spider-Verse) (feat. A Boogie...)"` → `"Calling"` (suppression parenthèses)
+
+### Résultats typiques
+
+Sur 824 tracks : ~795 enrichis via Deezer, ~20 via MusicBrainz, ~10 introuvables.
+
+Les tracks non trouvés (tous champs `None`) sont visibles avec :
+```bash
+python scripts/check_data.py --metadata
+```
 
 ---
 
@@ -305,32 +375,119 @@ Ce script :
 
 ---
 
+## Télécharger un audio de test — `scripts/download_test_audio.py`
+
+Télécharge un morceau depuis YouTube dans `data/raw/` pour tester la reconnaissance. Contrairement à `download_music.py`, ce script **stocke le fichier MP3 sur disque**.
+
+### Morceau entier
+
+```bash
+python scripts/download_test_audio.py "Miley Cyrus Flowers"
+python scripts/download_test_audio.py "Travis Scott PARASAIL"
+```
+
+### Extrait d'une durée précise
+
+```bash
+# 30 secondes
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30
+
+# 15 secondes
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 15
+
+# 10 secondes
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 10
+
+# 5 secondes
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 5
+```
+
+Durées disponibles : `5`, `10`, `15`, `30`
+
+### Choisir la position dans le morceau
+
+```bash
+# Depuis le début (défaut)
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position start
+
+# 1er quart (25%)
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position first-quarter
+
+# Milieu (50%) — recommandé : contient souvent le refrain
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position middle
+
+# 3ème quart (75%)
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position third-quarter
+
+# Fin du morceau
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position end
+```
+
+Positions disponibles : `start` · `first-quarter` · `middle` · `third-quarter` · `end`
+
+Le fichier est nommé automatiquement : `Titre__position_durées.mp3`
+Ex : `Miley Cyrus - Flowers (Official Video)__middle_30s.mp3`
+
+> **Note :** Si la position + durée dépasse la fin du morceau, le départ est automatiquement reculé et un avertissement s'affiche.
+
+> **Conseil :** Utiliser `--position middle` donne les meilleurs résultats de reconnaissance — le refrain est acoustiquement plus distinctif que l'intro.
+
+---
+
 ## Identifier un morceau — `src/api/app.py`
 
 ```bash
 # Avec la méthode par défaut (config.EMBEDDING_METHOD)
-python src/api/app.py mon_audio.mp3
+python src/api/app.py "data/raw/mon_audio.mp3"
 
 # Avec une méthode spécifique
-python src/api/app.py mon_audio.mp3 --method clap
+python src/api/app.py "data/raw/mon_audio.mp3" --method clap
+python src/api/app.py "data/raw/mon_audio.mp3" --method mfcc
+python src/api/app.py "data/raw/mon_audio.mp3" --method muq
 
-# Changer le nombre de résultats
-python src/api/app.py mon_audio.mp3 --top 10
+# Changer le nombre de résultats affichés
+python src/api/app.py "data/raw/mon_audio.mp3" --top 10
 ```
 
-Ou depuis Python :
+> **Note :** Si le chemin contient des espaces ou des parenthèses, l'entourer de guillemets.
+
+Le résultat s'affiche sous forme de tableau :
+
+```
+┏━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ # ┃ Artiste     ┃ Titre     ┃    Score ┃
+┡━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━┩
+│ 1 │ Miley Cyrus │ Flowers   │ 112.6771 │
+│ 2 │ OneRepublic │ I Ain't…  │  44.2401 │
+└───┴─────────────┴───────────┴──────────┘
+```
+
+Le rang 1 doit avoir un score significativement plus élevé que le rang 2 (ratio ~2.5x ou plus).
+
+### Depuis Python
 
 ```python
 from src.retrieval.query_pipeline import identify_track
 
-results = identify_track("mon_audio.mp3")                    # méthode par défaut
-results = identify_track("mon_audio.mp3", method="clap")     # méthode spécifique
-results = identify_track("mon_audio.mp3", top_n=10)
+results = identify_track("data/raw/mon_audio.mp3")               # méthode par défaut
+results = identify_track("data/raw/mon_audio.mp3", method="clap")
+results = identify_track("data/raw/mon_audio.mp3", top_n=10)
 
 # results = [(track_id, score), ...]
 for rank, (track_id, score) in enumerate(results, 1):
     print(f"{rank}. {track_id} — {score:.4f}")
 ```
+
+### Performances selon la durée de l'extrait
+
+| Durée | Position | Résultat attendu |
+|-------|----------|-----------------|
+| 30s | `middle` | Rang 1 fiable, ratio ~2.5x |
+| 15s | `middle` | Rang 1 correct, ratio ~1.4x |
+| 5s | `middle` | Insuffisant (1 seul segment FAISS) |
+| 30s | `start` | Variable selon l'intro du morceau |
+
+> **Limite connue :** Les intros instrumentales sont peu distinctives — préférer `--position middle` pour les tests.
 
 ---
 
@@ -413,9 +570,11 @@ Shazam/
 │       └── app.py            # CLI Click
 │
 └── scripts/
-    ├── download_music.py     # Téléchargement + build pipeline
-    ├── check_data.py         # Vérification + purge des données
-    └── evaluate.py           # Évaluation Top-1 / Top-5
+    ├── download_music.py       # Téléchargement CSV → base complète (embeddings + fingerprints + index)
+    ├── enrich_metadata.py      # Enrichissement métadonnées via Deezer API + MusicBrainz (fallback)
+    ├── download_test_audio.py  # Téléchargement d'un morceau de test dans data/raw/ (avec options durée/position)
+    ├── check_data.py           # Vérification + purge des données (résumé / --details / --metadata)
+    └── evaluate.py             # Évaluation Top-1 / Top-5
 ```
 
 ---

@@ -60,6 +60,8 @@ MUQ_SAMPLE_RATE  = 24000
 MUQ_MODEL_NAME   = "OpenMuQ/MuQ-large-msd-iter"
 MUQ_BATCH_SIZE   = 8
 
+CLAP_BATCH_SIZE  = 10   # À ajuster selon le GPU : trop grand = contre-productif sur MPS
+
 # Téléchargements parallèles (download_music.py)
 # Augmenter si connexion rapide, réduire si bans YouTube fréquents
 DOWNLOAD_WORKERS = 3

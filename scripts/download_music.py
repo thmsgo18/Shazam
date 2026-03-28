@@ -3,7 +3,7 @@ scripts/download_music.py
 
 But : lire un ou plusieurs CSV Kaggle Spotify, faire le matching YouTube,
       télécharger l'audio en RAM, calculer embeddings + fingerprints,
-      et construire l'index FAISS. Aucun MP3 n'est stocké sur disque.
+      et construire l'index FAISS. Aucun fichier audio n'est stocké sur disque.
 
 Prérequis :
     pip install pandas yt-dlp rich
@@ -47,6 +47,9 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+import warnings
+warnings.filterwarnings("ignore", message=".*upsample_bicubic2d.*", category=UserWarning)
+
 import chromadb
 import click
 import librosa
@@ -65,7 +68,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config
 from src.audio.preprocessing import iter_segments
-from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
+from src.features.embeddings_audio import embed_segment, muq_batch_embeddings, clap_batch_embeddings
 from src.features.fingerprint import extract_fingerprint
 
 FEATURES_DIR = Path("data/features")
@@ -239,12 +242,12 @@ def _kill_proc(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-def _download_mp3(
+def _download_audio(
     artist: str, title: str, retries: int = 3
 ) -> tuple[str, str, str, None] | tuple[None, None, None, str]:
     """
-    Télécharge uniquement le MP3 via yt-dlp (subprocess seul, pas de numpy/librosa).
-    Retourne (tmpdir, mp3_path, youtube_url, None) en cas de succès,
+    Télécharge l'audio via yt-dlp en RAM (subprocess seul, pas de numpy/librosa).
+    Retourne (tmpdir, audio_path, youtube_url, None) en cas de succès,
     ou (None, None, None, reason) en cas d'échec.
     """
     queries = [
@@ -326,7 +329,7 @@ def _download_mp3(
 
 
 # ===========================================================================
-# Pipeline RAM — traitement sans stockage MP3
+# Pipeline RAM — traitement sans stockage sur disque
 # ===========================================================================
 
 def _save_track(
@@ -375,6 +378,8 @@ def _save_track(
             current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
             if method not in current:
                 df_meta.at[idx, "embedded_methods"] = current + [method]
+            # La durée n'est PAS mise à jour : c'est une propriété du morceau,
+            # indépendante de la méthode d'embedding.
         else:
             df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
     else:
@@ -385,14 +390,13 @@ def _save_track(
 def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     """
     Pour chaque morceau : télécharge en RAM, calcule embeddings + fingerprint,
-    sauvegarde dans ChromaDB (embeddings + segments) / fingerprints.pkl / metadata.parquet.
+    sauvegarde dans ChromaDB (embeddings + segments) / fingerprints.db / metadata.parquet.
     La sauvegarde est faite après chaque track — reprise possible en cas d'interruption.
-    Aucun MP3 n'est écrit dans data/raw/.
     """
     torch.set_num_threads(4)
 
     method     = config.EMBEDDING_METHOD
-    batch_size = config.MUQ_BATCH_SIZE
+    batch_size = config.CLAP_BATCH_SIZE if method == "clap" else config.MUQ_BATCH_SIZE
 
     if method == "clap":
         load_sr = config.CLAP_SAMPLE_RATE
@@ -435,7 +439,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
         f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
         f"[bold]Méthode  :[/bold] [cyan]{method}[/cyan]\n"
         f"[bold]Tracks   :[/bold] {len(tracks)}\n"
-        f"[bold]Mode     :[/bold] [green]RAM (aucun MP3 stocké)[/green]",
+        f"[bold]Mode     :[/bold] [green]RAM (aucun fichier audio stocké)[/green]",
         title="[bold cyan]Download + Build Pipeline[/bold cyan]",
         expand=False
     ))
@@ -460,13 +464,20 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
         # Tâche Rich pour afficher les téléchargements en cours
         dl_status_task = progress.add_task("[yellow]⬇ En attente...", total=None)
 
+        # Tâche Rich pour la progression des segments — réutilisée à chaque track
+        # (visible=False au départ, affichée uniquement pendant le traitement d'un track)
+        track_task = (
+            progress.add_task("", total=1, visible=False)
+            if config.PROGRESS_TRACK else None
+        )
+
         def _download_task(track: dict) -> tuple:
             """
-            Télécharge uniquement le MP3 via subprocess — PAS de librosa/numpy ici.
+            Télécharge l'audio via subprocess — PAS de librosa/numpy ici.
             librosa.load sera appelé dans le thread principal pour éviter les deadlocks.
             """
-            tmpdir, mp3_path, url, dl_error = _download_mp3(track["artist"], track["title"])
-            return tmpdir, mp3_path, url, track, dl_error
+            tmpdir, audio_path, url, dl_error = _download_audio(track["artist"], track["title"])
+            return tmpdir, audio_path, url, track, dl_error
 
         # Sliding window : on ne soumet que DOWNLOAD_WORKERS+2 futures à la fois
         # pour ne pas bombarder YouTube avec toutes les requêtes d'un coup.
@@ -496,12 +507,12 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                         break
 
                 for future in finished:
-                    tmpdir, mp3_path, youtube_url, track, dl_error = future.result()
+                    tmpdir, audio_path, youtube_url, track, dl_error = future.result()
                     artist = track["artist"]
                     title  = track["title"]
                     label  = f"{artist} — {title}"
 
-                    if mp3_path is None:
+                    if audio_path is None:
                         ts = datetime.now().strftime("%H:%M:%S")
                         console.print(f"[red]  ✗ [{ts}] {label} — {dl_error}[/red]")
                         if dataset_task is not None:
@@ -513,7 +524,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
 
                     # librosa.load dans le thread principal — évite les deadlocks numpy
                     try:
-                        waveform, sr = librosa.load(mp3_path, sr=load_sr, mono=True)
+                        waveform, sr = librosa.load(audio_path, sr=load_sr, mono=True)
                     except Exception:
                         ts = datetime.now().strftime("%H:%M:%S")
                         console.print(f"[red]  ✗ [{ts}] Échec lecture audio : {label}[/red]")
@@ -528,11 +539,20 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                         f"{artist.lower()}_{title.lower()}".encode()
                     ).hexdigest()
 
+                    # Durée standardisée à SAMPLE_RATE (22 050 Hz) — indépendante
+                    # de la méthode d'embedding (CLAP=48kHz, MuQ=24kHz, MFCC=22kHz).
+                    # Garantit une valeur cohérente quelle que soit la méthode active.
+                    if sr != config.SAMPLE_RATE:
+                        _wf_std = librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                        duration_s = len(_wf_std) / config.SAMPLE_RATE
+                    else:
+                        duration_s = len(waveform) / sr
+
                     metadata_row = {
                         "track_id":         track_id,
                         "title":            title,
                         "artist":           artist,
-                        "duration":         len(waveform) / sr,
+                        "duration":         duration_s,
                         "source":           track["source"],
                         "url":              youtube_url,
                         "embedded_methods": [method],
@@ -542,9 +562,11 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                         "cover_url":        None,
                     }
 
-                    # Fingerprint — seulement si pas déjà dans la DB
+                    # Fingerprint — seulement si pas déjà dans la DB.
+                    # Pour MFCC : calculé ici (embedding rapide, pas besoin de paralléliser).
+                    # Pour CLAP/MuQ : calculé après le batch GPU (voir plus bas).
                     new_fp_hashes: set | None = None
-                    if track_id not in existing_fp_ids:
+                    if method not in ("muq", "clap") and track_id not in existing_fp_ids:
                         waveform_fp = (
                             librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
                             if sr != config.SAMPLE_RATE else waveform
@@ -555,21 +577,32 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                     # Segmentation + embedding
                     segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
 
-                    track_task = (
-                        progress.add_task(f"[green]{label[:50]}", total=len(segs))
-                        if config.PROGRESS_TRACK else None
-                    )
+                    if track_task is not None:
+                        progress.update(
+                            track_task,
+                            description=f"[green]{label[:50]}",
+                            total=len(segs),
+                            completed=0,
+                            visible=True,
+                        )
 
                     track_embeddings: list = []
                     track_segments:   list = []
 
-                    if method == "muq":
+                    if method in ("muq", "clap"):
+                        # Batch embedding (MuQ et CLAP)
                         for i in range(0, len(segs), batch_size):
                             batch = segs[i : i + batch_size]
-                            embs  = muq_batch_embeddings(
-                                [seg for _, seg in batch], sr=sr,
-                                model_name=config.MUQ_MODEL_NAME,
-                            )
+                            if method == "muq":
+                                embs = muq_batch_embeddings(
+                                    [seg for _, seg in batch], sr=sr,
+                                    model_name=config.MUQ_MODEL_NAME,
+                                )
+                            else:
+                                embs = clap_batch_embeddings(
+                                    [seg for _, seg in batch], sr=sr,
+                                    model_name=config.CLAP_MODEL_NAME,
+                                )
                             for j, (start_s, _) in enumerate(batch):
                                 track_embeddings.append(embs[j])
                                 track_segments.append({
@@ -579,6 +612,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                             if track_task is not None:
                                 progress.advance(track_task, advance=len(batch))
                     else:
+                        # MFCC : segment par segment (CPU, pas de batch GPU)
                         for start_s, seg in segs:
                             emb = embed_segment(
                                 seg, sr, method=method,
@@ -593,8 +627,17 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                             if track_task is not None:
                                 progress.advance(track_task)
 
+                    # Fingerprint séquentiel (CLAP/MuQ — pas déjà calculé plus haut)
+                    if method in ("muq", "clap") and track_id not in existing_fp_ids:
+                        waveform_fp = (
+                            librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                            if sr != config.SAMPLE_RATE else waveform
+                        )
+                        new_fp_hashes = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+                        existing_fp_ids.add(track_id)
+
                     if track_task is not None:
-                        progress.remove_task(track_task)
+                        progress.update(track_task, visible=False)
 
                     # Sauvegarde immédiate dans ChromaDB + SQLite + metadata
                     if track_embeddings:
@@ -627,7 +670,8 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     total_meta = len(pd.read_parquet(meta_path)) if meta_path.exists() else 0
     total_seg  = collection.count()
     sample     = collection.get(limit=1, include=["embeddings"])
-    emb_dim    = len(sample["embeddings"][0]) if sample.get("embeddings") else "?"
+    emb_list   = sample.get("embeddings")
+    emb_dim    = len(emb_list[0]) if emb_list is not None and len(emb_list) > 0 else "?"
 
     console.print(Panel(
         f"[bold]Nouveaux tracks  :[/bold] {saved_count}\n"
@@ -642,7 +686,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
 
 
 # ===========================================================================
-# Pipeline ancien — avec stockage MP3
+# Utilitaires CLI
 # ===========================================================================
 
 def run_step(label: str, cmd: list[str]) -> None:
