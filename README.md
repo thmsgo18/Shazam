@@ -18,27 +18,29 @@ python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50
 # 2. Enrichir les métadonnées (album, genre, date, pochette) via Deezer
 python scripts/enrich_metadata.py
 
-# 3. Télécharger un audio de test
-python scripts/download_test_audio.py "Miley Cyrus Flowers"
-python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position middle
+# 3. Lancer l'interface graphique
+streamlit run scripts/ui.py
 
-# 4. Identifier un morceau
+# 4. Identifier un morceau en ligne de commande
 python src/api/app.py "data/raw/mon_audio.mp3"
 python src/api/app.py "data/raw/mon_audio.mp3" --method clap --top 5
 
-# 5. Vérifier l'intégrité des données (vue résumé)
+# 5. Télécharger un audio de test (ligne de commande)
+python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position middle
+
+# 6. Vérifier l'intégrité des données (vue résumé)
 python scripts/check_data.py
 
-# 6. Voir le détail des problèmes d'embeddings/fingerprints
+# 7. Voir le détail des problèmes d'embeddings/fingerprints
 python scripts/check_data.py --details
 
-# 7. Voir les tracks avec métadonnées manquantes
+# 8. Voir les tracks avec métadonnées manquantes
 python scripts/check_data.py --metadata
 
-# 8. Supprimer les tracks problématiques (purge chirurgicale)
+# 9. Supprimer les tracks problématiques (purge chirurgicale)
 python scripts/check_data.py --purge
 
-# 9. Reconstruire l'index FAISS (si nécessaire)
+# 10. Reconstruire l'index FAISS (si nécessaire)
 python src/index/build_index.py
 ```
 

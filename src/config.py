@@ -77,3 +77,8 @@ OPT_SHORTCIRCUIT_RATIO   = 10.0  # Ratio score[0]/score[1] au-delà duquel on co
 # Affichage
 PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks
 PROGRESS_TRACK    = True   # Barre de progression par morceau (segments)
+
+# Interface graphique (ui.py)
+RUN_MODE            = "ui"  # "terminal" | "ui"  — mode de lancement
+UI_LISTEN_DURATION  = 15          # Durée d'enregistrement micro en secondes
+UI_CONFIDENCE_RATIO = 2.5         # Ratio score[0]/score[1] pour un résultat certain
