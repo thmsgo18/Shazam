@@ -47,7 +47,7 @@ function getStreaming(rec) {
   };
 }
 
-export default function RecModal({ lang, rec, onClose }) {
+export default function RecModal({ lang, rec, onClose, theme = "dark" }) {
   if (!rec) return null;
 
   const streaming = getStreaming(rec);
@@ -59,7 +59,7 @@ export default function RecModal({ lang, rec, onClose }) {
   }, [onClose]);
 
   return createPortal(
-    <div className="rec-modal-backdrop" onClick={onClose}>
+    <div className={`rec-modal-backdrop theme-${theme}`} onClick={onClose}>
       <div className="rec-modal" onClick={(e) => e.stopPropagation()}>
 
         {/* Close */}

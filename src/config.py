@@ -45,14 +45,14 @@ FP_MIN_DELTA_T        = 3     # Distance temporelle minimale entre deux pics (en
 FP_MAX_DELTA_T        = 50    # Distance temporelle maximale entre deux pics (en frames)
 
 # Vector search
-VECTOR_TOP_K_SEGMENTS = 200
-VECTOR_TOP_N_TRACKS   = 20
-VECTOR_TOP_N_RESULTS  = 5
+VECTOR_TOP_K_SEGMENTS = 200   # Nb de segments candidats récupérés depuis FAISS par segment requête
+VECTOR_TOP_N_TRACKS   = 20    # Nb de tracks uniques qui passent en Stage 2 (fingerprinting)
+VECTOR_TOP_N_RESULTS  = 10    # Nb de résultats finaux retournés à l'interface
 
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "mfcc"   # "mfcc" ou "clap" ou "muq"
+EMBEDDING_METHOD = "clap"   # "mfcc" ou "clap" ou "muq"
 CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 
@@ -78,7 +78,6 @@ OPT_SHORTCIRCUIT_RATIO   = 10.0  # Ratio score[0]/score[1] au-delà duquel on co
 PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks
 PROGRESS_TRACK    = True   # Barre de progression par morceau (segments)
 
-# Interface graphique (ui.py)
-RUN_MODE            = "ui"  # "terminal" | "ui"  — mode de lancement
+# Interface web (webapp/backend/server.py)
 UI_LISTEN_DURATION  = 15          # Durée d'enregistrement micro en secondes
 UI_CONFIDENCE_RATIO = 2.5         # Ratio score[0]/score[1] pour un résultat certain

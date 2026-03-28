@@ -1,12 +1,19 @@
-import React from "react";
+import React, { useState } from "react";
 import { t } from "../i18n";
 import AlbumCover from "./AlbumCover";
 import StreamingLinks from "./StreamingLinks";
 import Recommendations from "./Recommendations";
 
-export default function ResultView({ lang, data, onReset }) {
+export default function ResultView({ lang, data, onReset, theme, showDebug }) {
+  const [leaving, setLeaving] = useState(false);
+
   if (!data) return null;
   const { results, recommendations } = data;
+
+  const handleBack = () => {
+    setLeaving(true);
+    setTimeout(onReset, 380);
+  };
 
   if (!results?.length) {
     return (
@@ -20,12 +27,12 @@ export default function ResultView({ lang, data, onReset }) {
   const best = results[0];
 
   return (
-    <div className="result-split">
+    <div className={`result-split${leaving ? " result-split--leaving" : ""}`}>
 
       {/* ── LEFT: back arrow + cover + info ── */}
       <div className="result-split-left">
 
-        <button className="back-btn" onClick={onReset} aria-label="Retour">
+        <button className="back-btn" onClick={handleBack} aria-label="Retour">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M19 12H5"/>
@@ -45,19 +52,41 @@ export default function ResultView({ lang, data, onReset }) {
 
       </div>
 
-      {/* ── RIGHT: streaming + recommendations ── */}
+      {/* ── RIGHT: streaming + recommendations  OR  debug scores ── */}
       <div className="result-split-right">
 
-        <div>
-          <p className="result-section-label">{t(lang, "streaming")}</p>
-          <StreamingLinks lang={lang} streaming={best.streaming} />
-        </div>
-
-        {recommendations?.length > 0 && (
-          <div>
-            <p className="result-section-label">{t(lang, "recs")}</p>
-            <Recommendations lang={lang} recs={recommendations} />
+        {showDebug ? (
+          <div className="debug-panel">
+            <p className="result-section-label debug-panel-title">
+              {lang === "fr" ? "Top similarités" : "Similarity scores"}
+            </p>
+            <ol className="debug-list">
+              {results.slice(0, 10).map((r) => (
+                <li key={r.track_id} className={`debug-item${r.rank === 1 ? " debug-item--best" : ""}`}>
+                  <span className="debug-rank">#{r.rank}</span>
+                  <span className="debug-info">
+                    <span className="debug-title">{r.title}</span>
+                    <span className="debug-artist">{r.artist}</span>
+                  </span>
+                  <span className="debug-score">{r.score.toFixed(4)}</span>
+                </li>
+              ))}
+            </ol>
           </div>
+        ) : (
+          <>
+            <div>
+              <p className="result-section-label">{t(lang, "streaming")}</p>
+              <StreamingLinks lang={lang} streaming={best.streaming} />
+            </div>
+
+            {recommendations?.length > 0 && (
+              <div>
+                <p className="result-section-label">{t(lang, "recs")}</p>
+                <Recommendations lang={lang} recs={recommendations} theme={theme} />
+              </div>
+            )}
+          </>
         )}
 
       </div>

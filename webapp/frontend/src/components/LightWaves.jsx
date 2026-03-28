@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 
-const WAVES = [
+const WAVES_LIGHT = [
   { speed: 0.38, freqMult: 1.0,  baseAmp: 14, strokeW: 1.2, color: "rgba(37,99,235,0.13)"  },
   { speed: 0.30, freqMult: 0.85, baseAmp: 20, strokeW: 1.5, color: "rgba(59,130,246,0.18)" },
   { speed: 0.46, freqMult: 1.2,  baseAmp: 11, strokeW: 1.0, color: "rgba(96,165,250,0.14)" },
@@ -10,12 +10,23 @@ const WAVES = [
   { speed: 0.42, freqMult: 1.15, baseAmp: 13, strokeW: 1.1, color: "rgba(29,78,216,0.09)"  },
 ];
 
+const WAVES_DARK = [
+  { speed: 0.38, freqMult: 1.0,  baseAmp: 14, strokeW: 1.4, color: "rgba(29,78,216,0.35)"  },
+  { speed: 0.30, freqMult: 0.85, baseAmp: 20, strokeW: 1.8, color: "rgba(37,99,235,0.45)"  },
+  { speed: 0.46, freqMult: 1.2,  baseAmp: 11, strokeW: 1.2, color: "rgba(59,130,246,0.30)" },
+  { speed: 0.25, freqMult: 0.7,  baseAmp: 24, strokeW: 2.0, color: "rgba(29,78,216,0.28)"  },
+  { speed: 0.52, freqMult: 1.4,  baseAmp: 10, strokeW: 1.0, color: "rgba(37,99,235,0.22)"  },
+  { speed: 0.34, freqMult: 0.95, baseAmp: 18, strokeW: 1.5, color: "rgba(96,165,250,0.18)" },
+  { speed: 0.42, freqMult: 1.15, baseAmp: 13, strokeW: 1.3, color: "rgba(29,78,216,0.20)"  },
+];
+
 const STEPS = 120;
 
-export default function LightWaves() {
+export default function LightWaves({ variant = "light" }) {
   const svgRef   = useRef(null);
   const mouseRef = useRef({ x: 0.5, y: 0.5 });
   const rafRef   = useRef(null);
+  const WAVES    = variant === "dark" ? WAVES_DARK : WAVES_LIGHT;
 
   useEffect(() => {
     const onMove = (e) => {
@@ -41,14 +52,12 @@ export default function LightWaves() {
       const my = mouseRef.current.y;
 
       paths.forEach((path, i) => {
-        const wave = WAVES[i];
-        // Y position of this wave (evenly distributed)
-        const normY  = (i + 1) / (WAVES.length + 1);
-        const baseY  = normY * H;
+        const wave  = WAVES[i];
+        const normY = (i + 1) / (WAVES.length + 1);
+        const baseY = normY * H;
 
-        // How close is the mouse vertically (0=far, 1=right on the wave)
-        const distY    = Math.abs(my - normY);
-        const yProx    = Math.max(0, 1 - distY * 3.5);
+        const distY = Math.abs(my - normY);
+        const yProx = Math.max(0, 1 - distY * 3.5);
 
         const freq  = (2 * Math.PI / W) * wave.freqMult * 1.8;
         const phase = t * wave.speed;
@@ -57,12 +66,9 @@ export default function LightWaves() {
         for (let s = 0; s <= STEPS; s++) {
           const x     = (s / STEPS) * W;
           const normX = x / W;
+          const distX = Math.abs(normX - mx);
+          const xProx = Math.max(0, 1 - distX * 2.8);
 
-          // How close is the mouse horizontally
-          const distX  = Math.abs(normX - mx);
-          const xProx  = Math.max(0, 1 - distX * 2.8);
-
-          // Amplitude: base + bump where mouse is near
           const proximity = yProx * (0.25 + xProx * 0.75);
           const amp = wave.baseAmp + proximity * 62;
 
@@ -77,7 +83,7 @@ export default function LightWaves() {
 
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+  }, [WAVES]);
 
   return (
     <svg ref={svgRef} className="light-waves" xmlns="http://www.w3.org/2000/svg">

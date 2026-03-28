@@ -20,6 +20,7 @@ export default function App() {
   const [status,    setStatus]    = useState("idle");
   const [result,    setResult]    = useState(null);
   const [errorMsg,  setErrorMsg]  = useState("");
+  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/config`)
@@ -65,6 +66,7 @@ export default function App() {
     setStatus("idle");
     setResult(null);
     setErrorMsg("");
+    setShowDebug(false);
   }, []);
 
   const isIdle   = status === "idle";
@@ -79,8 +81,8 @@ export default function App() {
   return (
     <div className={`app theme-${theme}${lightAlbum ? " theme-light-result" : ""}${albumMode ? " theme-album-result" : ""}`}>
 
-      {theme === "dark"  && !isResult && <BgWaves />}
-      {theme === "light" && !isResult && <LightWaves />}
+      {theme === "dark"  && !isResult && <LightWaves variant="dark" />}
+      {theme === "light" && !isResult && <LightWaves variant="light" />}
 
       {/* Fond pochette flouté dans la vue résultat */}
       {albumMode && coverUrl && (
@@ -93,6 +95,8 @@ export default function App() {
         onToggleLang={() => setLang((l) => l === "fr" ? "en" : "fr")}
         theme={theme}
         onToggleTheme={() => setTheme((t) => t === "dark" ? "light" : "dark")}
+        showDebug={showDebug}
+        onToggleDebug={isResult ? () => setShowDebug((v) => !v) : undefined}
       />
 
       <main className={`main${isResult ? " main--result" : ""}`}>
@@ -140,7 +144,7 @@ export default function App() {
         )}
 
         {isResult && (
-          <ResultView lang={lang} data={result} onReset={reset} />
+          <ResultView lang={lang} data={result} onReset={reset} theme={theme} showDebug={showDebug} />
         )}
 
       </main>

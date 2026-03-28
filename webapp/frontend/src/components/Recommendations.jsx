@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import RecModal from "./RecModal";
 
-export default function Recommendations({ lang, recs }) {
+export default function Recommendations({ lang, recs, theme }) {
   const [selected, setSelected] = useState(null);
 
   if (!recs?.length) return null;
@@ -45,6 +45,7 @@ export default function Recommendations({ lang, recs }) {
         <RecModal
           lang={lang}
           rec={selected}
+          theme={theme}
           onClose={() => setSelected(null)}
         />
       )}

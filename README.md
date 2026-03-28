@@ -4,8 +4,9 @@
 ![Méthodes](https://img.shields.io/badge/Embeddings-MFCC%20%7C%20CLAP%20%7C%20MuQ-green)
 ![Index](https://img.shields.io/badge/Index-ChromaDB%20%2B%20FAISS-orange)
 ![Stockage](https://img.shields.io/badge/Fingerprints-SQLite-lightgrey)
+![Interface](https://img.shields.io/badge/Interface-React%20%2B%20FastAPI-blueviolet)
 
-Système de reconnaissance musicale inspiré de Shazam. À partir d'un extrait audio, retrouve le morceau correspondant dans une base de données vectorielle.
+Système de reconnaissance musicale inspiré de Shazam. À partir d'un extrait audio (micro ou fichier), retrouve le morceau correspondant dans une base de données vectorielle et affiche les liens de streaming ainsi que des recommandations similaires.
 
 ---
 
@@ -18,8 +19,9 @@ python scripts/download_music.py --csv data/kaggle/data/spotify-streaming-top-50
 # 2. Enrichir les métadonnées (album, genre, date, pochette) via Deezer
 python scripts/enrich_metadata.py
 
-# 3. Lancer l'interface graphique
-streamlit run scripts/ui.py
+# 3. Lancer l'interface web
+python scripts/start_webapp.py              # mode dev  (hot-reload, frontend :5173)
+python scripts/start_webapp.py --prod       # mode prod (build + tout sur :8000)
 
 # 4. Identifier un morceau en ligne de commande
 python src/api/app.py "data/raw/mon_audio.mp3"
@@ -43,6 +45,79 @@ python scripts/check_data.py --purge
 # 10. Reconstruire l'index FAISS (si nécessaire)
 python src/index/build_index.py
 ```
+
+---
+
+## Interface Web
+
+L'interface est une application **React + FastAPI** permettant d'identifier un morceau via le micro ou un fichier audio déposé.
+
+### Lancement
+
+```bash
+# Mode développement — hot-reload, idéal pour modifier le code
+python scripts/start_webapp.py
+
+# Mode production — build optimisé, tout servi par FastAPI sur un seul port
+python scripts/start_webapp.py --prod
+
+# Changer le port du backend (défaut : 8000)
+python scripts/start_webapp.py --port 8080
+```
+
+Le script vérifie automatiquement si `node_modules` est installé et lance `npm install` si nécessaire.
+
+| Mode | Frontend | Backend | URL principale |
+|------|----------|---------|----------------|
+| Dev  | Vite hot-reload | uvicorn --reload | http://localhost:5173 |
+| Prod | Build statique dans `webapp/frontend/dist/` | uvicorn | http://localhost:8000 |
+
+### Fonctionnalités
+
+- **Enregistrement micro** — durée configurable via `UI_LISTEN_DURATION` dans `config.py`
+- **Dépôt de fichier** — glisser-déposer ou sélection (MP3, WAV, FLAC, WebM…)
+- **Résultat** — pochette d'album, titre, artiste, liens de streaming (YouTube, Spotify, Deezer, Apple Music)
+- **Recommandations** — 4 morceaux du même genre avec modal de détail
+- **Scores de similarité** — bouton `</>` dans le header pour afficher le top 10 des candidats avec leurs scores
+- **Thème sombre / clair** — le thème clair adopte un fond pochette d'album en mode résultat
+- **Bilingue** — français / anglais
+
+### Architecture
+
+```
+webapp/
+├── backend/
+│   └── server.py          # FastAPI — routes /api/identify, /api/config, /api/health
+└── frontend/
+    ├── src/
+    │   ├── App.jsx                    # État global, routing entre vues
+    │   ├── components/
+    │   │   ├── Header.jsx             # Logo, toggle thème/langue, bouton debug
+    │   │   ├── ListenButton.jsx       # Bouton micro animé (idle / recording / analyzing)
+    │   │   ├── DropZone.jsx           # Zone de dépôt de fichier
+    │   │   ├── ResultView.jsx         # Vue résultat — layout 2 colonnes
+    │   │   ├── AlbumCover.jsx         # Pochette avec placeholder
+    │   │   ├── StreamingLinks.jsx     # Boutons plateformes de streaming
+    │   │   ├── Recommendations.jsx    # Grille de recommandations
+    │   │   ├── RecModal.jsx           # Modal détail d'une recommandation
+    │   │   ├── StatusPhrase.jsx       # Phrase d'état animée
+    │   │   ├── LightWaves.jsx         # Vagues SVG animées (fond accueil)
+    │   │   ├── BgWaves.jsx            # Anneaux de fond
+    │   │   └── Footer.jsx             # Lien GitHub
+    │   ├── hooks/
+    │   │   └── useRecorder.js         # Hook MediaRecorder + countdown
+    │   ├── i18n.js                    # Traductions FR/EN
+    │   └── index.css                  # Thèmes, animations, layout complet
+    └── package.json
+```
+
+### Routes API
+
+| Méthode | Route | Description |
+|---------|-------|-------------|
+| `POST` | `/api/identify` | Identification d'un fichier audio — retourne résultats + recommandations |
+| `GET`  | `/api/config`   | Paramètres UI (`listen_duration`, `confidence_ratio`, `embedding_method`) |
+| `GET`  | `/api/health`   | Liveness check |
 
 ---
 
@@ -82,7 +157,7 @@ CSV Kaggle Spotify
       ▼
 download_music.py
       │  yt-dlp → audio en RAM (aucun MP3 stocké)
-      │  embed_segment()      → ChromaDB  (data/chroma/)
+      │  embed_segment()       → ChromaDB  (data/chroma/)
       │  extract_fingerprint() → SQLite    (fingerprints.db)
       │                          metadata.parquet
       ▼
@@ -96,7 +171,7 @@ identify_track(audio)
       └── Stage 2 : fingerprint requête ↔ fingerprints SQLite → re-ranking
                                 │
                                 ▼
-                        Top N résultats
+                        Top 10 résultats
 ```
 
 ---
@@ -105,9 +180,10 @@ identify_track(audio)
 
 ### Prérequis système
 
-- Python 3.10
-- ffmpeg : `brew install ffmpeg` (macOS) / `apt install ffmpeg` (Linux) / [ffmpeg.org](https://ffmpeg.org/download.html) (Windows)
-- Clé API Kaggle : créer un compte sur [kaggle.com](https://kaggle.com), télécharger `kaggle.json` et le placer dans `~/.kaggle/kaggle.json`
+- **Python 3.10**
+- **Node.js 18+** (pour le frontend React) : [nodejs.org](https://nodejs.org/)
+- **ffmpeg** : `brew install ffmpeg` (macOS) / `apt install ffmpeg` (Linux) / [ffmpeg.org](https://ffmpeg.org/download.html) (Windows)
+- **Clé API Kaggle** : créer un compte sur [kaggle.com](https://kaggle.com), télécharger `kaggle.json` et le placer dans `~/.kaggle/kaggle.json`
 
 ### Environnement Python
 
@@ -125,7 +201,16 @@ source venv/bin/activate   # macOS / Linux
 pip install -r requirements.txt
 ```
 
-### Ajouter une librairie
+### Dépendances frontend
+
+Le script `start_webapp.py` lance `npm install` automatiquement si besoin. Pour l'installer manuellement :
+
+```bash
+cd webapp/frontend
+npm install
+```
+
+### Ajouter une librairie Python
 
 ```bash
 pip install ma-librairie
@@ -167,20 +252,19 @@ Tous les paramètres du projet sont centralisés ici. **Ne modifier que ce fichi
 
 | Paramètre | Défaut | Description |
 |-----------|--------|-------------|
-| `EMBEDDING_METHOD` | `"mfcc"` | Méthode active : `"mfcc"`, `"clap"` ou `"muq"` |
+| `EMBEDDING_METHOD` | `"clap"` | Méthode active : `"mfcc"`, `"clap"` ou `"muq"` |
 | `CLAP_MODEL_NAME` | `"laion/clap-htsat-unfused"` | Modèle CLAP (HuggingFace) |
 | `MUQ_MODEL_NAME` | `"OpenMuQ/MuQ-large-msd-iter"` | Modèle MuQ (HuggingFace) |
 | `MUQ_BATCH_SIZE` | `8` | Nombre de segments traités en batch par MuQ |
-| `CLAP_BATCH_SIZE` | `10` | Nombre de segments traités en batch par CLAP (sweet spot MPS = 10, CUDA peut monter plus haut) |
+| `CLAP_BATCH_SIZE` | `10` | Nombre de segments traités en batch par CLAP (sweet spot MPS = 10) |
 
 ### Recherche vectorielle
 
 | Paramètre | Défaut | Description |
 |-----------|--------|-------------|
-| `VECTOR_TOP_K_SEGMENTS` | `200` | Nombre de segments récupérés par FAISS |
-| `VECTOR_TOP_N_TRACKS` | `20` | Nombre de candidats pour le re-ranking |
-| `VECTOR_TOP_N_RESULTS` | `5` | Nombre de résultats finaux retournés |
-| `INDEX_TYPE` | `"flat"` | Type d'index : `"flat"`, `"hnsw"` ou `"ivf"` |
+| `VECTOR_TOP_K_SEGMENTS` | `200` | Nombre de segments candidats récupérés depuis FAISS par segment requête |
+| `VECTOR_TOP_N_TRACKS` | `20` | Nombre de tracks uniques qui passent en Stage 2 (fingerprinting) |
+| `VECTOR_TOP_N_RESULTS` | `10` | Nombre de résultats finaux retournés à l'interface |
 
 ### Optimisations
 
@@ -198,6 +282,13 @@ Tous les paramètres du projet sont centralisés ici. **Ne modifier que ce fichi
 |-----------|--------|-------------|
 | `PROGRESS_DATASET` | `True` | Barre de progression globale sur l'ensemble des tracks |
 | `PROGRESS_TRACK` | `True` | Barre de progression par morceau (segments) |
+
+### Interface web
+
+| Paramètre | Défaut | Description |
+|-----------|--------|-------------|
+| `UI_LISTEN_DURATION` | `15` | Durée d'enregistrement micro en secondes |
+| `UI_CONFIDENCE_RATIO` | `2.5` | Ratio score[0]/score[1] pour afficher un résultat comme certain |
 
 ---
 
@@ -248,7 +339,7 @@ Pour chaque morceau :
 → Construction de l'index FAISS depuis ChromaDB
 ```
 
-> **Durée standardisée :** Quelle que soit la méthode active (CLAP charge à 48 kHz, MuQ à 24 kHz, MFCC à 22 kHz), la durée stockée dans `metadata.parquet` est toujours mesurée à `SAMPLE_RATE` (22 050 Hz). Cela garantit une valeur cohérente et stable, indépendante du sample rate d'embedding.
+> **Durée standardisée :** Quelle que soit la méthode active, la durée stockée dans `metadata.parquet` est toujours mesurée à `SAMPLE_RATE` (22 050 Hz). Cela garantit une valeur cohérente et stable, indépendante du sample rate d'embedding.
 
 ---
 
@@ -391,16 +482,9 @@ python scripts/download_test_audio.py "Travis Scott PARASAIL"
 ### Extrait d'une durée précise
 
 ```bash
-# 30 secondes
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30
-
-# 15 secondes
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 15
-
-# 10 secondes
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 10
-
-# 5 secondes
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 5
 ```
 
@@ -409,19 +493,10 @@ Durées disponibles : `5`, `10`, `15`, `30`
 ### Choisir la position dans le morceau
 
 ```bash
-# Depuis le début (défaut)
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position start
-
-# 1er quart (25%)
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position first-quarter
-
-# Milieu (50%) — recommandé : contient souvent le refrain
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position middle
-
-# 3ème quart (75%)
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position third-quarter
-
-# Fin du morceau
 python scripts/download_test_audio.py "Miley Cyrus Flowers" --duration 30 --position end
 ```
 
@@ -430,9 +505,9 @@ Positions disponibles : `start` · `first-quarter` · `middle` · `third-quarter
 Le fichier est nommé automatiquement : `Titre__position_durées.mp3`
 Ex : `Miley Cyrus - Flowers (Official Video)__middle_30s.mp3`
 
-> **Note :** Si la position + durée dépasse la fin du morceau, le départ est automatiquement reculé et un avertissement s'affiche.
+> **Note :** Si la position + durée dépasse la fin du morceau, le départ est automatiquement reculé.
 
-> **Conseil :** Utiliser `--position middle` donne les meilleurs résultats de reconnaissance — le refrain est acoustiquement plus distinctif que l'intro.
+> **Conseil :** `--position middle` donne les meilleurs résultats — le refrain est acoustiquement plus distinctif que l'intro.
 
 ---
 
@@ -451,17 +526,15 @@ python src/api/app.py "data/raw/mon_audio.mp3" --method muq
 python src/api/app.py "data/raw/mon_audio.mp3" --top 10
 ```
 
-> **Note :** Si le chemin contient des espaces ou des parenthèses, l'entourer de guillemets.
-
 Le résultat s'affiche sous forme de tableau :
 
 ```
-┏━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ # ┃ Artiste     ┃ Titre     ┃    Score ┃
-┡━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━┩
-│ 1 │ Miley Cyrus │ Flowers   │ 112.6771 │
-│ 2 │ OneRepublic │ I Ain't…  │  44.2401 │
-└───┴─────────────┴───────────┴──────────┘
+┏━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
+┃ # ┃ Artiste     ┃ Titre    ┃    Score ┃
+┡━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
+│ 1 │ Miley Cyrus │ Flowers  │ 112.6771 │
+│ 2 │ OneRepublic │ I Ain't… │  44.2401 │
+└───┴─────────────┴──────────┴──────────┘
 ```
 
 Le rang 1 doit avoir un score significativement plus élevé que le rang 2 (ratio ~2.5x ou plus).
@@ -471,7 +544,7 @@ Le rang 1 doit avoir un score significativement plus élevé que le rang 2 (rati
 ```python
 from src.retrieval.query_pipeline import identify_track
 
-results = identify_track("data/raw/mon_audio.mp3")               # méthode par défaut
+results = identify_track("data/raw/mon_audio.mp3")                # méthode par défaut
 results = identify_track("data/raw/mon_audio.mp3", method="clap")
 results = identify_track("data/raw/mon_audio.mp3", top_n=10)
 
@@ -486,8 +559,8 @@ for rank, (track_id, score) in enumerate(results, 1):
 |-------|----------|-----------------|
 | 30s | `middle` | Rang 1 fiable, ratio ~2.5x |
 | 15s | `middle` | Rang 1 correct, ratio ~1.4x |
-| 5s | `middle` | Insuffisant (1 seul segment FAISS) |
-| 30s | `start` | Variable selon l'intro du morceau |
+| 5s  | `middle` | Insuffisant (1 seul segment FAISS) |
+| 30s | `start`  | Variable selon l'intro du morceau |
 
 > **Limite connue :** Les intros instrumentales sont peu distinctives — préférer `--position middle` pour les tests.
 
@@ -499,7 +572,7 @@ for rank, (track_id, score) in enumerate(results, 1):
 |---------|-------------|--------|
 | MFCC | Non | 100% CPU (numpy/librosa) |
 | CLAP | Oui si disponible | CUDA → MPS (Apple Silicon) → CPU |
-| MuQ | Oui si disponible | CUDA → CPU (MPS exclu : opérations ComplexFloat non supportées) |
+| MuQ  | Oui si disponible | CUDA → CPU (MPS exclu : opérations ComplexFloat non supportées) |
 
 > Le float16 (`OPT_FLOAT16`) n'est activé que sur CUDA. Sur CPU et MPS, float32 est utilisé.
 
@@ -534,7 +607,7 @@ python src/api/app.py mon_audio.mp3 --method muq
 |---------|-------------|-----------|
 | MFCC | ~8s | Bon |
 | CLAP | ~20s | Bon |
-| MuQ | ~2min30 | Excellent |
+| MuQ  | ~2min30 | Excellent |
 
 Le bon morceau doit toujours apparaître **en 1ère position** avec un score très largement supérieur au 2ème.
 
@@ -571,11 +644,24 @@ Shazam/
 │   └── api/
 │       └── app.py            # CLI Click
 │
+├── webapp/
+│   ├── backend/
+│   │   └── server.py         # FastAPI — identify, config, health + serve frontend (prod)
+│   └── frontend/
+│       ├── src/
+│       │   ├── App.jsx       # État global, routing entre vues
+│       │   ├── components/   # Header, ListenButton, DropZone, ResultView, RecModal…
+│       │   ├── hooks/        # useRecorder (MediaRecorder + countdown)
+│       │   ├── i18n.js       # Traductions FR/EN
+│       │   └── index.css     # Thèmes, animations, layout complet
+│       └── package.json
+│
 └── scripts/
-    ├── download_music.py       # Téléchargement CSV → base complète (embeddings + fingerprints + index)
-    ├── enrich_metadata.py      # Enrichissement métadonnées via Deezer API + MusicBrainz (fallback)
-    ├── download_test_audio.py  # Téléchargement d'un morceau de test dans data/raw/ (avec options durée/position)
-    ├── check_data.py           # Vérification + purge des données (résumé / --details / --metadata)
+    ├── start_webapp.py         # ← Lancer l'interface web (dev ou prod)
+    ├── download_music.py       # Téléchargement CSV → base complète
+    ├── enrich_metadata.py      # Enrichissement métadonnées (Deezer + MusicBrainz)
+    ├── download_test_audio.py  # Téléchargement d'un morceau de test
+    ├── check_data.py           # Vérification + purge des données
     └── evaluate.py             # Évaluation Top-1 / Top-5
 ```
 
@@ -583,9 +669,9 @@ Shazam/
 
 ## Dépannage
 
-### `Collection 'mfcc' introuvable dans ChromaDB`
-```
-Lance d'abord : python scripts/download_music.py
+### `Collection 'clap' introuvable dans ChromaDB`
+```bash
+python scripts/download_music.py
 ```
 
 ### `FAISS index manquant`
@@ -594,10 +680,13 @@ L'index n'a pas encore été construit ou a été supprimé après un `--purge`.
 python src/index/build_index.py
 ```
 
+### `npm: command not found`
+Node.js n'est pas installé. Télécharge-le sur [nodejs.org](https://nodejs.org/) (LTS recommandé).
+
 ### `NotImplementedError: MPS device` (Mac Apple Silicon)
 Normalement géré automatiquement. Si le problème persiste :
 ```bash
-PYTORCH_ENABLE_MPS_FALLBACK=1 python ...
+PYTORCH_ENABLE_MPS_FALLBACK=1 python scripts/start_webapp.py
 ```
 
 ### Le processus freeze et ne répond plus (même à Ctrl+C)
