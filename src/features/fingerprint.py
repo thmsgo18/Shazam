@@ -1,9 +1,8 @@
 """
 src/features/fingerprint.py
 
-Fingerprinting audio inspiré de l'algorithme Shazam.
-Utilisé comme étape de re-ranking après la recherche FAISS.
-Responsable : Personne B
+Audio fingerprinting inspired by the Shazam algorithm.
+Used as a re-ranking step after FAISS research.
 """
 
 from __future__ import annotations
@@ -16,25 +15,25 @@ import src.config as config
 
 def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
     """
-    Extrait le fingerprint audio d'un waveform sous forme de constellation map.
+    Extracts the audio fingerprint from a waveform in the form of a constellation map. 
 
-    Principe (algorithme Shazam simplifié) :
-    1. Calculer le spectrogramme (magnitude STFT).
-    2. Détecter les pics locaux dans l'espace temps-fréquence.
-    3. Pour chaque paire de pics proches, créer un hash (freq1, freq2, delta_t).
+    Principle (simplified Shazam algorithm): 
+    1. Calculate the spectrogram (STFT magnitude). 
+    2. Detect local peaks in time-frequency space. 
+    3. For each pair of nearby peaks, create a hash (freq1, freq2, delta_t).
 
     Args:
-        waveform: signal audio mono en float32.
-        sr:       taux d'échantillonnage du signal.
+        waveform: mono audio signal in float32.
+        sr:       signal sampling rate.
 
     Returns:
-        Ensemble de tuples (freq1, freq2, delta_t) représentant le fingerprint.
+        Set of tuples (freq1, freq2, delta_t) representing the fingerprint.
     """
-    # 1. Calcul du spectrogramme
+    # 1. Calculation of the spectrogram
     stft = librosa.stft(waveform, n_fft=config.FP_N_FFT, hop_length=config.FP_HOP_LENGTH)
     spectrogram = np.abs(stft)
 
-    # 2. Détection des pics locaux
+    # 2. DDetection of local peaks
     local_max = (maximum_filter(spectrogram, size=config.FP_NEIGHBORHOOD) == spectrogram)
 
     threshold = np.percentile(spectrogram, config.FP_THRESHOLD_PERCENTILE)
@@ -43,7 +42,7 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
     freq_bins, time_frames = np.where(peaks_mask)
     peaks = sorted(zip(time_frames, freq_bins))
 
-    # 3. Génération des hashes combinatoires
+    # 3. Generation of composite hashes
     hashes = set()
 
     for i, (t1, f1) in enumerate(peaks):
@@ -56,7 +55,7 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
             t2, f2 = peaks[i + j]
             delta_t = t2 - t1
 
-            # si le pic est dans la zone visée
+            # if the peak is in the target area
             if config.FP_MIN_DELTA_T <= delta_t <= config.FP_MAX_DELTA_T:
                 hashes.add((int(f1), int(f2), int(delta_t)))
                 connections += 1
@@ -75,21 +74,21 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
 
 def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> float:
     """
-    Calcule la similarité entre deux fingerprints (recall-based).
+    Calculates the similarity between two fingerprints (recall-based). 
 
     Score = |fp_query ∩ fp_candidate| / |fp_query|
 
-    On mesure quelle fraction des hashes de la requête (extrait court) se retrouve
-    dans le candidat (morceau entier). Contrairement à Jaccard, ce score n'est pas
-    pénalisé par le fait que le morceau en base est plus long que la requête.
+    We measure what fraction of the hashes of the query (short extract) are found 
+    in the candidate (whole piece). Unlike Jaccard, this score is not 
+    penalized by the fact that the base piece is longer than the query.
 
     Args:
-        fp_query:     fingerprint de l'extrait requête.
-        fp_candidate: fingerprint du morceau en base.
+        fp_query:     fingerprint of the query extract.
+        fp_candidate: fingerprint of the candidate piece.
 
     Returns:
-        Score entre 0.0 (aucune ressemblance) et 1.0 (tous les hashes retrouvés).
-        Retourne 0.0 si l'un des deux ensembles est vide.
+        Score between 0.0 (no similarity) and 1.0 (all hashes found).
+        Returns 0.0 if either set is empty.
     """
     if not fp_query or not fp_candidate:
         return 0.0
@@ -106,9 +105,9 @@ if __name__ == "__main__":
     dummy_waveform = np.random.randn(sr * 3).astype(np.float32) # 3 secondes
     
     fp = extract_fingerprint(dummy_waveform, sr)
-    print(f"Nombre de hashes générés: {len(fp)}")
+    print(f"Number of hashes generated: {len(fp)}")
     
-    # Test de similarité
+    # Test of similarity
     score = fingerprint_similarity(fp, fp)
-    print(f"Similarité sur le même morceau (attendu 1.0) : {score}")
+    print(f"Similarity on the same clip (expected 1.0) : {score}")
 '''
