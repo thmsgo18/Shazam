@@ -40,19 +40,21 @@ def _load_metadata() -> dict[str, dict]:
 
 @click.command()
 @click.argument("audio_file", type=click.Path(exists=True))
-@click.option("--method", default=None, help="mfcc / clap / muq (défaut : config.py)")
-@click.option("--top", default=5, show_default=True, help="Nombre de résultats à afficher")
-def identify(audio_file: str, method: str | None, top: int) -> None:
+@click.option("--method",   default=None,  help="mfcc / clap / muq (défaut : config.py)")
+@click.option("--top",      default=5,     show_default=True, help="Nombre de résultats à afficher")
+@click.option("--detailed", is_flag=True,  default=False, help="Afficher le détail des scores FAISS et fingerprint")
+def identify(audio_file: str, method: str | None, top: int, detailed: bool) -> None:
     """
     Identifie le morceau correspondant à AUDIO_FILE.
 
     Affiche le classement des morceaux les plus probables avec leur score.
+    Avec --detailed : affiche aussi les scores FAISS et fingerprint séparément.
     """
     console.print(f"\n[bold cyan]Identification de :[/bold cyan] {audio_file}")
     if method:
         console.print(f"[dim]Méthode : {method}[/dim]\n")
 
-    results = identify_track(audio_file, method=method, top_n=top)
+    results = identify_track(audio_file, method=method, top_n=top, detailed=detailed)
 
     if not results:
         console.print("[red]Aucun résultat trouvé.[/red]")
@@ -61,16 +63,30 @@ def identify(audio_file: str, method: str | None, top: int) -> None:
     metadata = _load_metadata()
 
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Artiste")
-    table.add_column("Titre")
-    table.add_column("Score", justify="right")
+    table.add_column("#",           style="dim", width=3)
+    table.add_column("Artiste",                  width=24)
+    table.add_column("Titre",                    width=34)
+    table.add_column("Score final", justify="right")
+    if detailed:
+        table.add_column("Score FAISS", justify="right")
+        table.add_column("Score FP",    justify="right")
 
-    for rank, (track_id, score) in enumerate(results, start=1):
-        info = metadata.get(track_id, {})
-        artist = info.get("artist", track_id)
-        title  = info.get("title", "—")
-        table.add_row(str(rank), artist, title, f"{score:.4f}")
+    for rank, row in enumerate(results, start=1):
+        track_id    = row[0]
+        score_final = row[1]
+        info   = metadata.get(track_id, {})
+        artist = info.get("artist", track_id)[:24]
+        title  = info.get("title",  "—")[:34]
+
+        if detailed:
+            score_faiss = row[2]
+            score_fp    = row[3]
+            table.add_row(str(rank), artist, title,
+                          f"{score_final:.4f}",
+                          f"{score_faiss:.4f}",
+                          f"{score_fp:.4f}")
+        else:
+            table.add_row(str(rank), artist, title, f"{score_final:.4f}")
 
     console.print(table)
 

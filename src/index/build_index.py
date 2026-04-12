@@ -90,32 +90,31 @@ def load_index(path: Path) -> faiss.Index:
     return faiss.read_index(str(path))
 
 
-if __name__ == "__main__":
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    import chromadb
+def _build_for_method(collection_key: str, index_type: str, chroma_client) -> None:
+    """
+    Construit et sauvegarde l'index FAISS pour une collection ChromaDB donnée.
+
+    Args:
+        collection_key: clé méthode+modèle, ex. "clap_larger_clap_music" ou "mfcc".
+                        C'est aussi le nom de la collection ChromaDB.
+    """
     import src.config as config
 
-    method     = config.EMBEDDING_METHOD
-    index_type = getattr(config, "INDEX_TYPE", "flat")
-    out_path   = Path(f"{config.INDEX_DIR}/index_{method}_{index_type}.faiss")
-    order_path = Path(f"{config.INDEX_DIR}/segments_{method}.parquet")
+    out_path   = Path(f"{config.INDEX_DIR}/index_{collection_key}_{index_type}.faiss")
+    order_path = Path(f"{config.INDEX_DIR}/segments_{collection_key}.parquet")
 
-    # Charger les embeddings et métadonnées depuis ChromaDB
-    chroma_client = chromadb.PersistentClient(path=config.CHROMA_DIR)
     try:
-        collection = chroma_client.get_collection(name=method)
+        collection = chroma_client.get_collection(name=collection_key)
     except Exception:
-        print(f"[build_index] Collection '{method}' introuvable dans ChromaDB.")
-        print(f"[build_index] Lance d'abord : python scripts/download_music.py")
-        sys.exit(1)
+        print(f"[build_index] Collection '{collection_key}' introuvable dans ChromaDB — ignorée.")
+        return
 
     n = collection.count()
     if n == 0:
-        print(f"[build_index] La collection '{method}' est vide — rien à indexer.")
-        sys.exit(1)
+        print(f"[build_index] La collection '{collection_key}' est vide — ignorée.")
+        return
 
-    print(f"[build_index] Chargement de {n} segments depuis ChromaDB…")
+    print(f"\n[build_index] ── Collection : {collection_key} | {n} segments ──")
 
     # Pagination pour éviter l'erreur SQLite "too many SQL variables"
     PAGE = 500
@@ -140,16 +139,51 @@ if __name__ == "__main__":
     df_order.to_parquet(order_path, index=False)
     print(f"[build_index] Ordre des segments sauvegardé → {order_path}")
 
-    print(f"[build_index] Méthode = {method} | Index type = {index_type}")
     print(f"[build_index] {len(embeddings)} vecteurs, dim={embeddings.shape[1]}")
-
     index = build_index(embeddings, index_type=index_type)
     save_index(index, out_path)
-    print(f"[build_index] Index sauvegardé → {out_path}")
 
     # Vérification finale
     check_index = load_index(out_path)
     assert check_index.ntotal == len(embeddings), (
         f"Mismatch : {check_index.ntotal} vecteurs dans l'index vs {len(embeddings)} attendus"
     )
-    print(f"[build_index] Vérification OK — {check_index.ntotal} vecteurs dans l'index.")
+    print(f"[build_index] ✓ {check_index.ntotal} vecteurs indexés → {out_path}")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    import chromadb
+    import src.config as config
+
+    parser = argparse.ArgumentParser(description="Construit l'index FAISS depuis ChromaDB.")
+    parser.add_argument(
+        "--method",
+        default=None,
+        help="Méthode d'embedding à indexer (mfcc, clap, muq). "
+             "Si non spécifié, toutes les collections disponibles sont indexées.",
+    )
+    args = parser.parse_args()
+
+    index_type    = getattr(config, "INDEX_TYPE", "flat")
+    chroma_client = chromadb.PersistentClient(path=config.CHROMA_DIR)
+
+    if args.method:
+        # L'utilisateur passe "clap", "mfcc", "muq" → on résout la clé collection
+        collection_keys = [config.get_collection_key(args.method)]
+        print(f"[build_index] Clé collection résolue : {collection_keys[0]}")
+    else:
+        # Toutes les collections présentes dans ChromaDB
+        collection_keys = [c.name for c in chroma_client.list_collections()]
+        if not collection_keys:
+            print("[build_index] Aucune collection trouvée dans ChromaDB.")
+            print("[build_index] Lance d'abord : python scripts/download_music.py")
+            sys.exit(1)
+        print(f"[build_index] Collections disponibles : {collection_keys}")
+
+    for key in collection_keys:
+        _build_for_method(key, index_type, chroma_client)
+
+    print("\n[build_index] Terminé.")

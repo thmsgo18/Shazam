@@ -22,6 +22,7 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
 
     Args:
         method: méthode d'embedding — "mfcc", "clap" ou "muq".
+                La clé collection (méthode + modèle) est résolue via config.get_collection_key().
 
     Returns:
         Tuple (index FAISS, DataFrame segments).
@@ -29,20 +30,19 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     Raises:
         FileNotFoundError: si l'index n'existe pas (build_index.py non lancé).
     """
+    key        = config.get_collection_key(method)
     index_type = config.INDEX_TYPE
-    index_path = Path(f"{config.INDEX_DIR}/index_{method}_{index_type}.faiss")
-    seg_path = Path(f"{config.FEATURES_DIR}/segments_{method}.parquet")
+    index_path = Path(f"{config.INDEX_DIR}/index_{key}_{index_type}.faiss")
 
     if not index_path.exists():
-        # Cherche quelles méthodes sont disponibles pour aider l'utilisateur
+        # Cherche quelles clés sont disponibles pour aider l'utilisateur
         index_dir = Path(config.INDEX_DIR)
-        available = [p.stem.replace(f"_{index_type}", "").replace("index_", "")
-                     for p in index_dir.glob(f"index_*_{index_type}.faiss")]
+        available = [p.stem for p in index_dir.glob(f"index_*_{index_type}.faiss")]
         if available:
             raise FileNotFoundError(
-                f"Pas d'index '{method}' (type={index_type}) dans {index_dir}/.\n"
-                f"Méthodes disponibles : {', '.join(sorted(available))}.\n"
-                f"Change EMBEDDING_METHOD dans config.py ou relance download_music.py."
+                f"Pas d'index pour '{method}' (clé='{key}', type={index_type}) dans {index_dir}/.\n"
+                f"Index disponibles : {', '.join(sorted(available))}.\n"
+                f"Change EMBEDDING_METHOD / CLAP_MODEL_NAME dans config.py ou relance build_index.py."
             )
         raise FileNotFoundError(
             f"Aucun index trouvé dans {index_dir}/.\n"
@@ -53,7 +53,7 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
 
     # L'ordre des segments est sauvegardé dans INDEX_DIR par build_index.py
     # (reconstruit depuis ChromaDB à chaque build — toujours synchronisé avec l'index FAISS)
-    seg_path = Path(f"{config.INDEX_DIR}/segments_{method}.parquet")
+    seg_path = Path(f"{config.INDEX_DIR}/segments_{key}.parquet")
     if not seg_path.exists():
         raise FileNotFoundError(
             f"Fichier d'ordre des segments manquant : {seg_path}\n"

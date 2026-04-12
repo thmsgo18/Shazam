@@ -35,7 +35,8 @@ def identify_track(
     audio_path: str,
     method: str | None = None,
     top_n: int = config.VECTOR_TOP_N_RESULTS,
-) -> list[tuple[str, float]]:
+    detailed: bool = False,
+) -> list[tuple]:
     """
     Identifie le morceau correspondant à un fichier audio.
 
@@ -50,9 +51,12 @@ def identify_track(
         audio_path: chemin vers le fichier audio à identifier.
         method:     méthode d'embedding — None utilise config.EMBEDDING_METHOD.
         top_n:      nombre de résultats finaux à retourner.
+        detailed:   si True, retourne (track_id, score_final, score_faiss, score_fp)
+                    au lieu de (track_id, score_final).
 
     Returns:
-        Liste triée [(track_id, score_final), ...] du meilleur au moins bon.
+        Si detailed=False : [(track_id, score_final), ...]
+        Si detailed=True  : [(track_id, score_final, score_faiss, score_fp), ...]
 
     Dépendances :
         - src.audio.loading.load_audio()
@@ -123,7 +127,10 @@ def identify_track(
     # Court-circuit : si le 1er candidat est très largement devant, inutile de faire le fingerprinting
     if config.OPT_SHORTCIRCUIT and len(candidates) >= 2:
         if candidates[1][1] > 0 and candidates[0][1] / candidates[1][1] >= config.OPT_SHORTCIRCUIT_RATIO:
-            return [(track_id, score) for track_id, score in candidates[:top_n]]
+            top = candidates[:top_n]
+            if detailed:
+                return [(tid, score, score, 0.0) for tid, score in top]
+            return [(tid, score) for tid, score in top]
 
     # Calcul du fingerprint de la requête — toujours à SAMPLE_RATE pour cohérence avec les fingerprints stockés
     if targ_sr != config.SAMPLE_RATE:
@@ -146,14 +153,15 @@ def identify_track(
         return pickle.loads(row[0]) if row else None
 
     def process_candidate(candidate):
-        """Récupère le fingerprint d'un candidat depuis SQLite."""
+        """Récupère le fingerprint d'un candidat et calcule les scores détaillés."""
         track_id, score_faiss = candidate
         candidate_fp = _get_fp(track_id)
         if candidate_fp is None or len(candidate_fp) == 0:
             # Fingerprint manquant ou vide — score neutre : on garde le classement FAISS intact.
-            return (track_id, score_faiss)
+            return (track_id, score_faiss, score_faiss, 0.0)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
-        return (track_id, score_faiss * (1.0 + score_fp))
+        score_final = score_faiss * (1.0 + score_fp)
+        return (track_id, score_final, score_faiss, score_fp)
 
     if config.OPT_FINGERPRINT_PARALLEL:
         # Chargement et fingerprinting des candidats en parallèle
@@ -163,4 +171,9 @@ def identify_track(
         # Traitement séquentiel (comportement de base)
         final_scores = [process_candidate(c) for c in candidates]
 
-    return sorted(final_scores, key=lambda x: x[1], reverse=True)[:top_n] # Retourner les top_n meilleurs morceaux.
+    final_scores.sort(key=lambda x: x[1], reverse=True)
+    top = final_scores[:top_n]
+
+    if detailed:
+        return top  # (track_id, score_final, score_faiss, score_fp)
+    return [(tid, score_final) for tid, score_final, _, __ in top]

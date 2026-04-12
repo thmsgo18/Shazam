@@ -204,6 +204,35 @@ def get_csv_files(csv_path: str) -> list[Path]:
     return [p]
 
 
+def normalize_title(title: str) -> str:
+    """
+    Normalise un titre pour la déduplication.
+
+    Supprime les marqueurs de version qui désignent le même enregistrement
+    de base sous un nom différent, sans toucher aux feats ni aux remixes
+    (qui impliquent des artistes ou des sons différents).
+
+    Exemples :
+        "Enchanted (Taylor's Version)"          → "Enchanted"
+        "Blank Space (Taylor's Version)"        → "Blank Space"
+        "Foolish One (From The Vault)"          → "Foolish One"
+        "Cruel Summer - Live from TS | The Eras Tour" → "Cruel Summer"
+        "Flowers (Radio Edit)"                  → "Flowers"
+        "As It Was (feat. Kid Harpoon)"         → inchangé  (feat. conservé)
+        "Die For You (with Ariana Grande)"      → inchangé  (with conservé)
+    """
+    t = title.strip()
+    # Re-enregistrements : (Taylor's Version), (Deluxe Version), (Twin Ver.)...
+    t = re.sub(r"\s*\([^)]*version\b[^)]*\)", "", t, flags=re.IGNORECASE)
+    # Inédits : (From The Vault)
+    t = re.sub(r"\s*\(from the vault\)", "", t, flags=re.IGNORECASE)
+    # Live : "- Live from X", "- Live at X"
+    t = re.sub(r"\s*-\s*live\b.*$", "", t, flags=re.IGNORECASE)
+    # Format de sortie : (Radio Edit), (Single Version), (Album Version)
+    t = re.sub(r"\s*\((radio edit|single version|album version)\)", "", t, flags=re.IGNORECASE)
+    return t.strip()
+
+
 def load_tracks_from_csv(csv_path: Path) -> list[dict]:
     """Lit un CSV Kaggle et retourne tous les titres uniques."""
     df = pd.read_csv(csv_path)
@@ -214,7 +243,15 @@ def load_tracks_from_csv(csv_path: Path) -> list[dict]:
         console.print(f"[red]Colonnes titre/artiste introuvables dans {csv_path}[/red]")
         return []
 
-    df = df[[title_col, artist_col]].dropna().drop_duplicates(subset=[title_col, artist_col])
+    df = df[[title_col, artist_col]].dropna()
+
+    # Déduplication sur le titre normalisé + artiste pour éviter les doublons
+    # du type "Enchanted" / "Enchanted (Taylor's Version)" ou
+    # "Cruel Summer" / "Cruel Summer - Live from TS | The Eras Tour".
+    # On conserve le titre original pour la recherche YouTube et les métadonnées.
+    df["_title_norm"] = df[title_col].apply(normalize_title)
+    df = df.drop_duplicates(subset=["_title_norm", artist_col])
+    df = df.drop(columns=["_title_norm"])
 
     tracks = []
     for row in df.itertuples(index=False):
@@ -261,7 +298,8 @@ def _download_audio(
         "--output", "%(id)s.%(ext)s",
         "--quiet", "--no-warnings",
         "--socket-timeout", "30",
-        "--extractor-args", "youtube:player_client=android",
+        "--cookies-from-browser", "chrome",
+        "--remote-components", "ejs:github",
     ]
     last_reason = "introuvable sur YouTube"
     for query in queries:
@@ -376,8 +414,9 @@ def _save_track(
             idx = df_meta.index[df_meta["track_id"] == track_id][0]
             current = df_meta.at[idx, "embedded_methods"]
             current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
-            if method not in current:
-                df_meta.at[idx, "embedded_methods"] = current + [method]
+            method_key = get_method_key(method)
+            if method_key not in current:
+                df_meta.at[idx, "embedded_methods"] = current + [method_key]
             # La durée n'est PAS mise à jour : c'est une propriété du morceau,
             # indépendante de la méthode d'embedding.
         else:
@@ -428,21 +467,47 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
     # Charger les track_ids déjà fingerprinted (set léger, pas les données)
     existing_fp_ids: set[str] = _fp_load_ids(fp_db)
 
-    # Initialiser ChromaDB — collection par méthode d'embedding
+    # Initialiser ChromaDB — collection par méthode + modèle d'embedding
+    collection_key = config.get_collection_key(method)
     chroma_client = chromadb.PersistentClient(path=config.CHROMA_DIR)
     collection = chroma_client.get_or_create_collection(
-        name=method,
+        name=collection_key,
         metadata={"hnsw:space": "cosine"},
     )
+
+    if torch.cuda.is_available():
+        device = "cuda"
+        device_label = "[bold green]GPU (CUDA)[/bold green]"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        device_label = "[bold green]GPU (MPS — Apple Silicon)[/bold green]"
+    else:
+        device = "cpu"
+        device_label = "[yellow]CPU[/yellow]"
 
     console.print(Panel(
         f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
         f"[bold]Méthode  :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Device   :[/bold] {device_label}\n"
         f"[bold]Tracks   :[/bold] {len(tracks)}\n"
         f"[bold]Mode     :[/bold] [green]RAM (aucun fichier audio stocké)[/green]",
         title="[bold cyan]Download + Build Pipeline[/bold cyan]",
         expand=False
     ))
+
+    # Pré-chargement du modèle avant la boucle principale, pour que le
+    # premier morceau ne subisse pas le délai de chargement silencieusement.
+    if method == "clap":
+        from src.features.embeddings_audio import _load_clap
+        console.print(f"[cyan]Chargement du modèle {config.CLAP_MODEL_NAME} sur {device}...[/cyan]")
+        _load_clap(config.CLAP_MODEL_NAME, device=device)
+        console.print(f"[green]✓ Modèle CLAP prêt.[/green]\n")
+    elif method == "muq":
+        from src.features.embeddings_audio import _load_muq
+        console.print(f"[cyan]Chargement du modèle {config.MUQ_MODEL_NAME} sur {device}...[/cyan]")
+        _load_muq(config.MUQ_MODEL_NAME, device=device)
+        console.print(f"[green]✓ Modèle MuQ prêt.[/green]\n")
+    # MFCC : pas de modèle à charger
 
     saved_count = 0
 
@@ -555,7 +620,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                         "duration":         duration_s,
                         "source":           track["source"],
                         "url":              youtube_url,
-                        "embedded_methods": [method],
+                        "embedded_methods": [get_method_key(method)],
                         "album":            None,
                         "release_date":     None,
                         "genre":            None,
@@ -732,6 +797,25 @@ def download_kaggle_csvs() -> None:
     console.print(f"[green]CSV téléchargés dans {KAGGLE_DIR}[/green]\n")
 
 
+def get_method_key(method: str) -> str:
+    """
+    Retourne la clé complète identifiant la méthode ET le modèle utilisé.
+
+    Permet de distinguer, par exemple, clap-htsat-unfused de larger_clap_music
+    dans la colonne embedded_methods de metadata.parquet.
+
+    Exemples :
+        "mfcc"  → "mfcc"
+        "clap"  → "clap:laion/clap-htsat-unfused"
+        "muq"   → "muq:OpenMuQ/MuQ-large-msd-iter"
+    """
+    if method == "clap":
+        return f"clap:{config.CLAP_MODEL_NAME}"
+    if method == "muq":
+        return f"muq:{config.MUQ_MODEL_NAME}"
+    return method  # mfcc : pas de modèle externe
+
+
 def load_already_processed(method: str) -> set[tuple[str, str]]:
     """
     Retourne l'ensemble des (artist, title) déjà traités POUR LA MÉTHODE DONNÉE.
@@ -750,10 +834,11 @@ def load_already_processed(method: str) -> set[tuple[str, str]]:
     if "artist" not in df_meta.columns or "title" not in df_meta.columns:
         return set()
 
+    method_key = get_method_key(method)
     return {
         (str(r.artist).lower(), str(r.title).lower())
         for r in df_meta.itertuples()
-        if hasattr(r.embedded_methods, '__iter__') and not isinstance(r.embedded_methods, str) and method in r.embedded_methods
+        if hasattr(r.embedded_methods, '__iter__') and not isinstance(r.embedded_methods, str) and method_key in r.embedded_methods
     }
 
 

@@ -52,19 +52,19 @@ VECTOR_TOP_N_RESULTS  = 10    # Nb de résultats finaux retournés à l'interfac
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "clap"   # "mfcc" ou "clap" ou "muq"
-CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"
+EMBEDDING_METHOD = "mfcc"                           # "mfcc" ou "clap" ou "muq"
+CLAP_MODEL_NAME  = "laion/larger_clap_music"        # "laion/clap-htsat-unfused"
 CLAP_SAMPLE_RATE = 48000
 
 MUQ_SAMPLE_RATE  = 24000
 MUQ_MODEL_NAME   = "OpenMuQ/MuQ-large-msd-iter"
 MUQ_BATCH_SIZE   = 8
 
-CLAP_BATCH_SIZE  = 10   # À ajuster selon le GPU : trop grand = contre-productif sur MPS
+CLAP_BATCH_SIZE  = 32   # À ajuster selon le GPU : trop grand = contre-productif sur MPS
 
 # Téléchargements parallèles (download_music.py)
 # Augmenter si connexion rapide, réduire si bans YouTube fréquents
-DOWNLOAD_WORKERS = 3
+DOWNLOAD_WORKERS = 5
 
 # Optimisations
 # Mettre à False pour revenir au comportement de base sans optimisations
@@ -81,3 +81,23 @@ PROGRESS_TRACK    = True   # Barre de progression par morceau (segments)
 # Interface web (webapp/backend/server.py)
 UI_LISTEN_DURATION  = 15          # Durée d'enregistrement micro en secondes
 UI_CONFIDENCE_RATIO = 2.5         # Ratio score[0]/score[1] pour un résultat certain
+
+
+def get_collection_key(method: str = None) -> str:
+    """
+    Retourne la clé unique méthode+modèle utilisée pour nommer :
+      - la collection ChromaDB  (ex. "clap_larger_clap_music")
+      - l'index FAISS           (ex. "index_clap_larger_clap_music_flat.faiss")
+      - le parquet segments     (ex. "segments_clap_larger_clap_music.parquet")
+
+    La clé est filesystem-safe (pas de '/', ':', '-' → remplacés par '_').
+    """
+    if method is None:
+        method = EMBEDDING_METHOD
+    if method == "clap":
+        model_slug = CLAP_MODEL_NAME.split("/")[-1].replace("-", "_")
+        return f"clap_{model_slug}"
+    if method == "muq":
+        model_slug = MUQ_MODEL_NAME.split("/")[-1].replace("-", "_")
+        return f"muq_{model_slug}"
+    return method  # mfcc : pas de modèle externe

@@ -1,0 +1,1205 @@
+{
+  "run_label": "baseline",
+  "timestamp": "2026-04-10T14:24:47.038841",
+  "target": {
+    "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+    "title": "Flowers - Miley Cyrus"
+  },
+  "results": {
+    "CLEAN  | middle  5s": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 88.8074,
+      "ratio": 3.993,
+      "score_flowers_faiss": 31.6379,
+      "score_flowers_fp": 0.1807,
+      "score_flowers_final": 88.8074,
+      "elapsed_s": 6.5,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 88.8074,
+          "faiss": 31.6379,
+          "fp": 0.1807
+        },
+        {
+          "rank": 2,
+          "track_id": "c515d614a28810143f4828d8fc161fae",
+          "score": 22.2418,
+          "faiss": 22.0721,
+          "fp": 0.000769
+        },
+        {
+          "rank": 3,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 16.6177,
+          "faiss": 16.4909,
+          "fp": 0.000769
+        },
+        {
+          "rank": 4,
+          "track_id": "50b211f54b2da63c48c76e8e9f6ad5f3",
+          "score": 12.9587,
+          "faiss": 12.8598,
+          "fp": 0.000769
+        },
+        {
+          "rank": 5,
+          "track_id": "3b5712542d3196e60aac27978f4c2d1d",
+          "score": 11.0757,
+          "faiss": 10.9494,
+          "fp": 0.001153
+        },
+        {
+          "rank": 6,
+          "track_id": "5a308ef8b7ebd6ee662c00172f519020",
+          "score": 11.0674,
+          "faiss": 11.025,
+          "fp": 0.000384
+        },
+        {
+          "rank": 7,
+          "track_id": "997c807e7044fc0f57937c0debe18e4f",
+          "score": 9.1731,
+          "faiss": 9.138,
+          "fp": 0.000384
+        },
+        {
+          "rank": 8,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 7.3992,
+          "faiss": 7.2871,
+          "fp": 0.001538
+        },
+        {
+          "rank": 9,
+          "track_id": "f9779e5f1f412f94a4575fd0d8ff33c0",
+          "score": 7.3838,
+          "faiss": 7.3275,
+          "fp": 0.000769
+        },
+        {
+          "rank": 10,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 6.4077,
+          "faiss": 6.3588,
+          "fp": 0.000769
+        }
+      ],
+      "type": "real"
+    },
+    "CLEAN  | middle 15s": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 362.8115,
+      "ratio": 5.807,
+      "score_flowers_faiss": 128.4503,
+      "score_flowers_fp": 0.182453,
+      "score_flowers_final": 362.8115,
+      "elapsed_s": 2.6,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 362.8115,
+          "faiss": 128.4503,
+          "fp": 0.182453
+        },
+        {
+          "rank": 2,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 62.4819,
+          "faiss": 62.2359,
+          "fp": 0.000395
+        },
+        {
+          "rank": 3,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 54.1725,
+          "faiss": 53.9592,
+          "fp": 0.000395
+        },
+        {
+          "rank": 4,
+          "track_id": "86b815c53f9d8a376ac1739acc5846eb",
+          "score": 43.8175,
+          "faiss": 43.645,
+          "fp": 0.000395
+        },
+        {
+          "rank": 5,
+          "track_id": "986b31520b64dd447c5866df12160d05",
+          "score": 41.7361,
+          "faiss": 41.6264,
+          "fp": 0.000263
+        },
+        {
+          "rank": 6,
+          "track_id": "0084b0afa52ae1fe2c427c7986ef043c",
+          "score": 38.8868,
+          "faiss": 38.7338,
+          "fp": 0.000395
+        },
+        {
+          "rank": 7,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 35.2299,
+          "faiss": 35.0452,
+          "fp": 0.000527
+        },
+        {
+          "rank": 8,
+          "track_id": "8bdc92765ec1edf024e16c29c5f374b9",
+          "score": 32.5129,
+          "faiss": 32.3849,
+          "fp": 0.000395
+        },
+        {
+          "rank": 9,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 30.4959,
+          "faiss": 30.336,
+          "fp": 0.000527
+        },
+        {
+          "rank": 10,
+          "track_id": "c3cf917550575965acf2d49dc9f0bb54",
+          "score": 27.8322,
+          "faiss": 27.7226,
+          "fp": 0.000395
+        }
+      ],
+      "type": "real"
+    },
+    "CLEAN  | middle 30s": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 468.7582,
+      "ratio": 3.878,
+      "score_flowers_faiss": 265.7292,
+      "score_flowers_fp": 0.076404,
+      "score_flowers_final": 468.7582,
+      "elapsed_s": 2.7,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 468.7582,
+          "faiss": 265.7292,
+          "fp": 0.076404
+        },
+        {
+          "rank": 2,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 120.8777,
+          "faiss": 120.7027,
+          "fp": 0.000145
+        },
+        {
+          "rank": 3,
+          "track_id": "8bdc92765ec1edf024e16c29c5f374b9",
+          "score": 99.7316,
+          "faiss": 99.4432,
+          "fp": 0.00029
+        },
+        {
+          "rank": 4,
+          "track_id": "6525684d664cc0a9aec59e1fc92c822d",
+          "score": 84.3069,
+          "faiss": 84.1848,
+          "fp": 0.000145
+        },
+        {
+          "rank": 5,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 81.2804,
+          "faiss": 81.0454,
+          "fp": 0.00029
+        },
+        {
+          "rank": 6,
+          "track_id": "986b31520b64dd447c5866df12160d05",
+          "score": 79.5982,
+          "faiss": 79.4255,
+          "fp": 0.000217
+        },
+        {
+          "rank": 7,
+          "track_id": "0084b0afa52ae1fe2c427c7986ef043c",
+          "score": 78.0507,
+          "faiss": 77.8251,
+          "fp": 0.00029
+        },
+        {
+          "rank": 8,
+          "track_id": "766d26ab34ad93e07bcedaec708d3b3c",
+          "score": 75.2538,
+          "faiss": 75.0905,
+          "fp": 0.000217
+        },
+        {
+          "rank": 9,
+          "track_id": "86b815c53f9d8a376ac1739acc5846eb",
+          "score": 72.4187,
+          "faiss": 72.3139,
+          "fp": 0.000145
+        },
+        {
+          "rank": 10,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 70.4964,
+          "faiss": 70.3434,
+          "fp": 0.000217
+        }
+      ],
+      "type": "real"
+    },
+    "CLEAN  | start  30s": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 164.3232,
+      "ratio": 1.117,
+      "score_flowers_faiss": 119.8665,
+      "score_flowers_fp": 0.037089,
+      "score_flowers_final": 164.3232,
+      "elapsed_s": 2.5,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 164.3232,
+          "faiss": 119.8665,
+          "fp": 0.037089
+        },
+        {
+          "rank": 2,
+          "track_id": "414b77ed73eb52cf686ced13d47063e0",
+          "score": 147.1765,
+          "faiss": 146.8361,
+          "fp": 0.000232
+        },
+        {
+          "rank": 3,
+          "track_id": "3fdf01d41ce816afcad103e05376bb01",
+          "score": 71.4489,
+          "faiss": 71.2837,
+          "fp": 0.000232
+        },
+        {
+          "rank": 4,
+          "track_id": "7cbad2e64b09bbd28fa08e8d1721634c",
+          "score": 63.4724,
+          "faiss": 63.2524,
+          "fp": 0.000348
+        },
+        {
+          "rank": 5,
+          "track_id": "0361efd3dd7585bff16e08aea8012504",
+          "score": 61.5481,
+          "faiss": 61.3349,
+          "fp": 0.000348
+        },
+        {
+          "rank": 6,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 59.8195,
+          "faiss": 59.6811,
+          "fp": 0.000232
+        },
+        {
+          "rank": 7,
+          "track_id": "f20556fbd85ca27d784025293d949600",
+          "score": 58.9535,
+          "faiss": 58.8171,
+          "fp": 0.000232
+        },
+        {
+          "rank": 8,
+          "track_id": "dcdacaee32db88ef6c95133841723624",
+          "score": 40.9678,
+          "faiss": 40.7788,
+          "fp": 0.000464
+        },
+        {
+          "rank": 9,
+          "track_id": "db12bf73aa99d1310e14179c73f69dec",
+          "score": 35.5109,
+          "faiss": 35.4288,
+          "fp": 0.000232
+        },
+        {
+          "rank": 10,
+          "track_id": "746b8c9dcc6d496b20f8d4e1cc18acd4",
+          "score": 35.5109,
+          "faiss": 35.4288,
+          "fp": 0.000232
+        }
+      ],
+      "type": "real"
+    },
+    "MIC    | reel   24s": {
+      "success": true,
+      "error": null,
+      "rank": 8,
+      "top1_is_flowers": false,
+      "score_top1": 147.8726,
+      "ratio": 1.857,
+      "score_flowers_faiss": 26.8342,
+      "score_flowers_fp": 0.024631,
+      "score_flowers_final": 33.4438,
+      "elapsed_s": 2.3,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "af5fb78aa48f3559fdc534a682685d45",
+          "score": 147.8726,
+          "faiss": 147.2011,
+          "fp": 0.000456
+        },
+        {
+          "rank": 2,
+          "track_id": "b4acb8828497223b3142b6c683a9752b",
+          "score": 79.6279,
+          "faiss": 79.2664,
+          "fp": 0.000456
+        },
+        {
+          "rank": 3,
+          "track_id": "f20556fbd85ca27d784025293d949600",
+          "score": 74.4816,
+          "faiss": 74.2558,
+          "fp": 0.000304
+        },
+        {
+          "rank": 4,
+          "track_id": "7cbad2e64b09bbd28fa08e8d1721634c",
+          "score": 65.6898,
+          "faiss": 65.4907,
+          "fp": 0.000304
+        },
+        {
+          "rank": 5,
+          "track_id": "0361efd3dd7585bff16e08aea8012504",
+          "score": 65.4825,
+          "faiss": 65.1851,
+          "fp": 0.000456
+        },
+        {
+          "rank": 6,
+          "track_id": "b6145f931ea73f4d1a5ca3f58989e20a",
+          "score": 37.5297,
+          "faiss": 37.4159,
+          "fp": 0.000304
+        },
+        {
+          "rank": 7,
+          "track_id": "f2f5a228897409c733446cac59022d56",
+          "score": 37.4617,
+          "faiss": 37.3481,
+          "fp": 0.000304
+        },
+        {
+          "rank": 8,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 33.4438,
+          "faiss": 26.8342,
+          "fp": 0.024631
+        },
+        {
+          "rank": 9,
+          "track_id": "99d163dc168ebc9ee6121a6716ad665a",
+          "score": 32.9525,
+          "faiss": 32.8526,
+          "fp": 0.000304
+        },
+        {
+          "rank": 10,
+          "track_id": "2af71ba1775b55b86acd4b0414ef1579",
+          "score": 27.5139,
+          "faiss": 27.389,
+          "fp": 0.000456
+        }
+      ],
+      "type": "real"
+    },
+    "SIM    | bruit SNR 30dB (SNR=30.0dB)": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 258.5615,
+      "ratio": 3.635,
+      "score_flowers_faiss": 93.5908,
+      "score_flowers_fp": 0.176268,
+      "score_flowers_final": 258.5615,
+      "elapsed_s": 2.2,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 258.5615,
+          "faiss": 93.5908,
+          "fp": 0.176268
+        },
+        {
+          "rank": 2,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 71.1363,
+          "faiss": 70.8548,
+          "fp": 0.000397
+        },
+        {
+          "rank": 3,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 68.2863,
+          "faiss": 67.9264,
+          "fp": 0.00053
+        },
+        {
+          "rank": 4,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 46.8908,
+          "faiss": 46.7053,
+          "fp": 0.000397
+        },
+        {
+          "rank": 5,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 37.8833,
+          "faiss": 37.7333,
+          "fp": 0.000397
+        },
+        {
+          "rank": 6,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 36.9782,
+          "faiss": 36.8805,
+          "fp": 0.000265
+        },
+        {
+          "rank": 7,
+          "track_id": "0084b0afa52ae1fe2c427c7986ef043c",
+          "score": 33.1061,
+          "faiss": 33.0186,
+          "fp": 0.000265
+        },
+        {
+          "rank": 8,
+          "track_id": "986b31520b64dd447c5866df12160d05",
+          "score": 29.662,
+          "faiss": 29.5836,
+          "fp": 0.000265
+        },
+        {
+          "rank": 9,
+          "track_id": "c515d614a28810143f4828d8fc161fae",
+          "score": 25.9736,
+          "faiss": 25.905,
+          "fp": 0.000265
+        },
+        {
+          "rank": 10,
+          "track_id": "696939eb1300e1d3ceb12b48ac900852",
+          "score": 25.2935,
+          "faiss": 25.1934,
+          "fp": 0.000397
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | bruit SNR 20dB (SNR=20.0dB)": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 172.9114,
+      "ratio": 1.889,
+      "score_flowers_faiss": 74.1804,
+      "score_flowers_fp": 0.133096,
+      "score_flowers_final": 172.9114,
+      "elapsed_s": 2.2,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 172.9114,
+          "faiss": 74.1804,
+          "fp": 0.133096
+        },
+        {
+          "rank": 2,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 91.5124,
+          "faiss": 91.1644,
+          "fp": 0.000382
+        },
+        {
+          "rank": 3,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 77.3954,
+          "faiss": 77.101,
+          "fp": 0.000382
+        },
+        {
+          "rank": 4,
+          "track_id": "766d26ab34ad93e07bcedaec708d3b3c",
+          "score": 53.9436,
+          "faiss": 53.7384,
+          "fp": 0.000382
+        },
+        {
+          "rank": 5,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 43.5826,
+          "faiss": 43.472,
+          "fp": 0.000254
+        },
+        {
+          "rank": 6,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 38.1966,
+          "faiss": 38.0513,
+          "fp": 0.000382
+        },
+        {
+          "rank": 7,
+          "track_id": "74852384e64934b27cf552b1c32cf002",
+          "score": 29.6186,
+          "faiss": 29.5434,
+          "fp": 0.000254
+        },
+        {
+          "rank": 8,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 23.3573,
+          "faiss": 23.2685,
+          "fp": 0.000382
+        },
+        {
+          "rank": 9,
+          "track_id": "3b5712542d3196e60aac27978f4c2d1d",
+          "score": 23.2436,
+          "faiss": 23.1552,
+          "fp": 0.000382
+        },
+        {
+          "rank": 10,
+          "track_id": "696939eb1300e1d3ceb12b48ac900852",
+          "score": 21.7472,
+          "faiss": 21.6645,
+          "fp": 0.000382
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | bruit SNR 10dB (SNR=10.0dB)": {
+      "success": true,
+      "error": null,
+      "rank": 7,
+      "top1_is_flowers": false,
+      "score_top1": 113.3983,
+      "ratio": 1.18,
+      "score_flowers_faiss": 31.1915,
+      "score_flowers_fp": 0.032125,
+      "score_flowers_final": 41.2117,
+      "elapsed_s": 2.2,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 113.3983,
+          "faiss": 113.029,
+          "fp": 0.000327
+        },
+        {
+          "rank": 2,
+          "track_id": "766d26ab34ad93e07bcedaec708d3b3c",
+          "score": 96.0612,
+          "faiss": 95.7484,
+          "fp": 0.000327
+        },
+        {
+          "rank": 3,
+          "track_id": "f2f5a228897409c733446cac59022d56",
+          "score": 60.3281,
+          "faiss": 60.1316,
+          "fp": 0.000327
+        },
+        {
+          "rank": 4,
+          "track_id": "3b5712542d3196e60aac27978f4c2d1d",
+          "score": 59.2316,
+          "faiss": 59.0387,
+          "fp": 0.000327
+        },
+        {
+          "rank": 5,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 46.3147,
+          "faiss": 46.1639,
+          "fp": 0.000327
+        },
+        {
+          "rank": 6,
+          "track_id": "74852384e64934b27cf552b1c32cf002",
+          "score": 45.632,
+          "faiss": 45.4341,
+          "fp": 0.000436
+        },
+        {
+          "rank": 7,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 41.2117,
+          "faiss": 31.1915,
+          "fp": 0.032125
+        },
+        {
+          "rank": 8,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 22.9755,
+          "faiss": 22.9007,
+          "fp": 0.000327
+        },
+        {
+          "rank": 9,
+          "track_id": "fb78637162b588d09dd09e442472f5bf",
+          "score": 19.0861,
+          "faiss": 19.0446,
+          "fp": 0.000218
+        },
+        {
+          "rank": 10,
+          "track_id": "757818c8aa998e37b35f98fd959c1633",
+          "score": 14.889,
+          "faiss": 14.8405,
+          "fp": 0.000327
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | bruit SNR  5dB (SNR=5.0dB)": {
+      "success": true,
+      "error": null,
+      "rank": 7,
+      "top1_is_flowers": false,
+      "score_top1": 97.065,
+      "ratio": 1.203,
+      "score_flowers_faiss": 22.0507,
+      "score_flowers_fp": 0.017615,
+      "score_flowers_final": 25.935,
+      "elapsed_s": 2.2,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 97.065,
+          "faiss": 96.8569,
+          "fp": 0.000215
+        },
+        {
+          "rank": 2,
+          "track_id": "766d26ab34ad93e07bcedaec708d3b3c",
+          "score": 80.6565,
+          "faiss": 80.3114,
+          "fp": 0.00043
+        },
+        {
+          "rank": 3,
+          "track_id": "3b5712542d3196e60aac27978f4c2d1d",
+          "score": 76.8471,
+          "faiss": 76.6824,
+          "fp": 0.000215
+        },
+        {
+          "rank": 4,
+          "track_id": "f2f5a228897409c733446cac59022d56",
+          "score": 58.3209,
+          "faiss": 58.1959,
+          "fp": 0.000215
+        },
+        {
+          "rank": 5,
+          "track_id": "74852384e64934b27cf552b1c32cf002",
+          "score": 48.672,
+          "faiss": 48.5677,
+          "fp": 0.000215
+        },
+        {
+          "rank": 6,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 37.1429,
+          "faiss": 37.0236,
+          "fp": 0.000322
+        },
+        {
+          "rank": 7,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 25.935,
+          "faiss": 22.0507,
+          "fp": 0.017615
+        },
+        {
+          "rank": 8,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 22.8278,
+          "faiss": 22.7788,
+          "fp": 0.000215
+        },
+        {
+          "rank": 9,
+          "track_id": "fb78637162b588d09dd09e442472f5bf",
+          "score": 22.2313,
+          "faiss": 22.1599,
+          "fp": 0.000322
+        },
+        {
+          "rank": 10,
+          "track_id": "db12bf73aa99d1310e14179c73f69dec",
+          "score": 18.8248,
+          "faiss": 18.7845,
+          "fp": 0.000215
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | reverb 30dB+reverb (SNR=4.6dB)": {
+      "success": true,
+      "error": null,
+      "rank": 2,
+      "top1_is_flowers": false,
+      "score_top1": 85.0098,
+      "ratio": 1.105,
+      "score_flowers_faiss": 61.772,
+      "score_flowers_fp": 0.024597,
+      "score_flowers_final": 76.9661,
+      "elapsed_s": 2.1,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 85.0098,
+          "faiss": 84.6569,
+          "fp": 0.000417
+        },
+        {
+          "rank": 2,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 76.9661,
+          "faiss": 61.772,
+          "fp": 0.024597
+        },
+        {
+          "rank": 3,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 71.299,
+          "faiss": 70.9048,
+          "fp": 0.000556
+        },
+        {
+          "rank": 4,
+          "track_id": "c515d614a28810143f4828d8fc161fae",
+          "score": 51.4354,
+          "faiss": 51.2928,
+          "fp": 0.000278
+        },
+        {
+          "rank": 5,
+          "track_id": "997c807e7044fc0f57937c0debe18e4f",
+          "score": 43.9441,
+          "faiss": 43.8223,
+          "fp": 0.000278
+        },
+        {
+          "rank": 6,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 31.014,
+          "faiss": 30.928,
+          "fp": 0.000278
+        },
+        {
+          "rank": 7,
+          "track_id": "0084b0afa52ae1fe2c427c7986ef043c",
+          "score": 30.9325,
+          "faiss": 30.8041,
+          "fp": 0.000417
+        },
+        {
+          "rank": 8,
+          "track_id": "48aefde6aaa070f7b6771a2305583184",
+          "score": 28.2332,
+          "faiss": 28.0771,
+          "fp": 0.000556
+        },
+        {
+          "rank": 9,
+          "track_id": "8863c5a31334373a33014eeb7a995625",
+          "score": 23.0406,
+          "faiss": 22.9767,
+          "fp": 0.000278
+        },
+        {
+          "rank": 10,
+          "track_id": "8beed09c7fdb8bf7e5d0ce4b7fb3433b",
+          "score": 18.6609,
+          "faiss": 18.6092,
+          "fp": 0.000278
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | reverb 10dB+reverb (SNR=3.8dB)": {
+      "success": true,
+      "error": null,
+      "rank": 10,
+      "top1_is_flowers": false,
+      "score_top1": 85.6461,
+      "ratio": 1.685,
+      "score_flowers_faiss": 19.5789,
+      "score_flowers_fp": 0.003887,
+      "score_flowers_final": 20.34,
+      "elapsed_s": 2.2,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 85.6461,
+          "faiss": 85.3534,
+          "fp": 0.000343
+        },
+        {
+          "rank": 2,
+          "track_id": "f2f5a228897409c733446cac59022d56",
+          "score": 50.8378,
+          "faiss": 50.664,
+          "fp": 0.000343
+        },
+        {
+          "rank": 3,
+          "track_id": "74852384e64934b27cf552b1c32cf002",
+          "score": 43.555,
+          "faiss": 43.4557,
+          "fp": 0.000229
+        },
+        {
+          "rank": 4,
+          "track_id": "766d26ab34ad93e07bcedaec708d3b3c",
+          "score": 42.8475,
+          "faiss": 42.701,
+          "fp": 0.000343
+        },
+        {
+          "rank": 5,
+          "track_id": "3b5712542d3196e60aac27978f4c2d1d",
+          "score": 36.1871,
+          "faiss": 36.0634,
+          "fp": 0.000343
+        },
+        {
+          "rank": 6,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 32.3386,
+          "faiss": 32.2281,
+          "fp": 0.000343
+        },
+        {
+          "rank": 7,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 28.3064,
+          "faiss": 28.2097,
+          "fp": 0.000343
+        },
+        {
+          "rank": 8,
+          "track_id": "b6145f931ea73f4d1a5ca3f58989e20a",
+          "score": 25.9895,
+          "faiss": 25.9303,
+          "fp": 0.000229
+        },
+        {
+          "rank": 9,
+          "track_id": "1dd391dc68eb96a44e2b1dd03058a0b2",
+          "score": 20.7401,
+          "faiss": 20.6692,
+          "fp": 0.000343
+        },
+        {
+          "rank": 10,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 20.34,
+          "faiss": 19.5789,
+          "fp": 0.003887
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | bandpass 300-7kHz (SNR=0.0dB)": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 74.9133,
+      "ratio": 1.25,
+      "score_flowers_faiss": 26.7649,
+      "score_flowers_fp": 0.179894,
+      "score_flowers_final": 74.9133,
+      "elapsed_s": 2.0,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 74.9133,
+          "faiss": 26.7649,
+          "fp": 0.179894
+        },
+        {
+          "rank": 2,
+          "track_id": "0361efd3dd7585bff16e08aea8012504",
+          "score": 59.9123,
+          "faiss": 59.597,
+          "fp": 0.000529
+        },
+        {
+          "rank": 3,
+          "track_id": "86b815c53f9d8a376ac1739acc5846eb",
+          "score": 52.669,
+          "faiss": 52.3918,
+          "fp": 0.000529
+        },
+        {
+          "rank": 4,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 51.5687,
+          "faiss": 51.3874,
+          "fp": 0.000353
+        },
+        {
+          "rank": 5,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 50.7555,
+          "faiss": 50.4884,
+          "fp": 0.000529
+        },
+        {
+          "rank": 6,
+          "track_id": "986b31520b64dd447c5866df12160d05",
+          "score": 46.4221,
+          "faiss": 46.1778,
+          "fp": 0.000529
+        },
+        {
+          "rank": 7,
+          "track_id": "202d0fb8b74392d6dc80cc171d5a563a",
+          "score": 39.3018,
+          "faiss": 39.1637,
+          "fp": 0.000353
+        },
+        {
+          "rank": 8,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 25.7228,
+          "faiss": 25.6324,
+          "fp": 0.000353
+        },
+        {
+          "rank": 9,
+          "track_id": "aa4ee6f97bb1224529428a19528ebd39",
+          "score": 24.31,
+          "faiss": 24.0975,
+          "fp": 0.000882
+        },
+        {
+          "rank": 10,
+          "track_id": "696939eb1300e1d3ceb12b48ac900852",
+          "score": 22.9893,
+          "faiss": 22.9085,
+          "fp": 0.000353
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | combo 15dB+rev+bp (SNR=-0.2dB)": {
+      "success": true,
+      "error": null,
+      "rank": null,
+      "top1_is_flowers": false,
+      "score_top1": 50.5831,
+      "ratio": 1.211,
+      "score_flowers_faiss": null,
+      "score_flowers_fp": null,
+      "score_flowers_final": null,
+      "elapsed_s": 2.0,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "a7697bdb493b220a3ab1d1334fbb04fc",
+          "score": 50.5831,
+          "faiss": 50.4105,
+          "fp": 0.000342
+        },
+        {
+          "rank": 2,
+          "track_id": "7dd82762de65090080b8563574ee41f0",
+          "score": 41.7714,
+          "faiss": 41.558,
+          "fp": 0.000514
+        },
+        {
+          "rank": 3,
+          "track_id": "45a81431c40b0575aa093fc5376f9a2c",
+          "score": 40.4941,
+          "faiss": 40.3559,
+          "fp": 0.000342
+        },
+        {
+          "rank": 4,
+          "track_id": "08dbc87da81fbe75232e02068450d8da",
+          "score": 31.4317,
+          "faiss": 31.2711,
+          "fp": 0.000514
+        },
+        {
+          "rank": 5,
+          "track_id": "8beed09c7fdb8bf7e5d0ce4b7fb3433b",
+          "score": 27.4729,
+          "faiss": 27.3325,
+          "fp": 0.000514
+        },
+        {
+          "rank": 6,
+          "track_id": "b611a65f1440a567e35958157f1e17a5",
+          "score": 24.3762,
+          "faiss": 24.2517,
+          "fp": 0.000514
+        },
+        {
+          "rank": 7,
+          "track_id": "31383e42fc1338a4a603f76245b94498",
+          "score": 20.7522,
+          "faiss": 20.6814,
+          "fp": 0.000342
+        },
+        {
+          "rank": 8,
+          "track_id": "18b0a73bfd72fa7c03cefd8f2d2619df",
+          "score": 20.6626,
+          "faiss": 20.5921,
+          "fp": 0.000342
+        },
+        {
+          "rank": 9,
+          "track_id": "4ca5b9eb5da45268ddcb8f9d243112c0",
+          "score": 19.2474,
+          "faiss": 19.2145,
+          "fp": 0.000171
+        },
+        {
+          "rank": 10,
+          "track_id": "663956a4fc3407f9c1dc449fbfd32bd4",
+          "score": 17.0815,
+          "faiss": 17.0232,
+          "fp": 0.000342
+        }
+      ],
+      "type": "simulated"
+    },
+    "SIM    | codec Opus 32kbps (SNR=15.3dB)": {
+      "success": true,
+      "error": null,
+      "rank": 1,
+      "top1_is_flowers": true,
+      "score_top1": 196.436,
+      "ratio": 3.815,
+      "score_flowers_faiss": 93.9318,
+      "score_flowers_fp": 0.109126,
+      "score_flowers_final": 196.436,
+      "elapsed_s": 2.3,
+      "all_results": [
+        {
+          "rank": 1,
+          "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8",
+          "score": 196.436,
+          "faiss": 93.9318,
+          "fp": 0.109126
+        },
+        {
+          "rank": 2,
+          "track_id": "5865f80e2d048b49d5e990fc665ef71c",
+          "score": 51.4865,
+          "faiss": 51.2029,
+          "fp": 0.000554
+        },
+        {
+          "rank": 3,
+          "track_id": "9583938660acbcd00da3e76fe4164012",
+          "score": 51.3815,
+          "faiss": 51.1689,
+          "fp": 0.000415
+        },
+        {
+          "rank": 4,
+          "track_id": "e08a9c32c9ed25acfe0b0d88fa1eff70",
+          "score": 49.4785,
+          "faiss": 49.2738,
+          "fp": 0.000415
+        },
+        {
+          "rank": 5,
+          "track_id": "86b815c53f9d8a376ac1739acc5846eb",
+          "score": 39.4255,
+          "faiss": 39.2623,
+          "fp": 0.000415
+        },
+        {
+          "rank": 6,
+          "track_id": "986b31520b64dd447c5866df12160d05",
+          "score": 39.4233,
+          "faiss": 39.2602,
+          "fp": 0.000415
+        },
+        {
+          "rank": 7,
+          "track_id": "0084b0afa52ae1fe2c427c7986ef043c",
+          "score": 35.8344,
+          "faiss": 35.6861,
+          "fp": 0.000415
+        },
+        {
+          "rank": 8,
+          "track_id": "64d33cd7d93df9e34d2caacb1d7b38e1",
+          "score": 35.6919,
+          "faiss": 35.4952,
+          "fp": 0.000554
+        },
+        {
+          "rank": 9,
+          "track_id": "9f1b162f0789526bbf21688b67c09033",
+          "score": 34.9337,
+          "faiss": 34.7892,
+          "fp": 0.000415
+        },
+        {
+          "rank": 10,
+          "track_id": "734a6c7c29361b1e6b9a3de985b44036",
+          "score": 33.8023,
+          "faiss": 33.6161,
+          "fp": 0.000554
+        }
+      ],
+      "type": "simulated"
+    }
+  },
+  "summary": {
+    "total_tests": 14,
+    "top1_correct": 8,
+    "top1_accuracy_pct": 57.1
+  }
+}
