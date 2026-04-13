@@ -15,6 +15,8 @@ import pandas as pd
 
 import src.config as config
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     """
@@ -32,11 +34,11 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     """
     key        = config.get_collection_key(method)
     index_type = config.INDEX_TYPE
-    index_path = Path(f"{config.INDEX_DIR}/index_{key}_{index_type}.faiss")
+    index_dir  = ROOT / config.INDEX_DIR
+    index_path = index_dir / f"index_{key}_{index_type}.faiss"
 
     if not index_path.exists():
         # Cherche quelles clés sont disponibles pour aider l'utilisateur
-        index_dir = Path(config.INDEX_DIR)
         available = [p.stem for p in index_dir.glob(f"index_*_{index_type}.faiss")]
         if available:
             raise FileNotFoundError(
@@ -53,7 +55,7 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
 
     # L'ordre des segments est sauvegardé dans INDEX_DIR par build_index.py
     # (reconstruit depuis ChromaDB à chaque build — toujours synchronisé avec l'index FAISS)
-    seg_path = Path(f"{config.INDEX_DIR}/segments_{key}.parquet")
+    seg_path = index_dir / f"segments_{key}.parquet"
     if not seg_path.exists():
         raise FileNotFoundError(
             f"Fichier d'ordre des segments manquant : {seg_path}\n"

@@ -1,0 +1,615 @@
+"""
+src/ingestion/ingest.py
+
+Pipeline principal d'ingestion : CSV Spotify → YouTube → Embeddings + Fingerprints → FAISS.
+
+Lit un ou plusieurs CSV Kaggle Spotify, fait le matching YouTube, télécharge l'audio
+en RAM, calcule les embeddings et les fingerprints, et sauvegarde dans ChromaDB / SQLite.
+Aucun fichier audio n'est stocké sur disque.
+
+Point d'entrée public : run_ingest(csv_paths=None)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as fut_wait, FIRST_COMPLETED
+from datetime import datetime
+from pathlib import Path
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+os.environ.setdefault("OMP_NUM_THREADS",      "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import warnings
+warnings.filterwarnings("ignore", message=".*upsample_bicubic2d.*", category=UserWarning)
+
+import chromadb
+import librosa
+import numpy as np
+import pandas as pd
+import torch
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn, MofNCompleteColumn, Progress,
+    SpinnerColumn, TextColumn, TimeElapsedColumn,
+)
+
+from src import config
+from src.audio.preprocessing import iter_segments
+from src.features.embeddings_audio import embed_segment, muq_batch_embeddings, clap_batch_embeddings
+from src.features.fingerprint import extract_fingerprint
+from src.utils.youtube import download_audio_search
+from src.utils.metadata import atomic_write_parquet
+from src.utils.fingerprints_db import (
+    fp_init, fp_load_ids, fp_save, fp_delete, fp_migrate_from_pkl,
+)
+
+ROOT          = Path(__file__).resolve().parents[2]
+FEATURES_DIR  = ROOT / "data" / "features"
+PROCESSED_DIR = ROOT / "data" / "processed"
+
+POSSIBLE_TITLE_COLS  = ["track_name", "name", "title", "song", "track"]
+POSSIBLE_ARTIST_COLS = ["artist_name", "artists", "artist", "performer", "track_artist"]
+
+KAGGLE_DATASET = "anxods/spotify-top-50-playlist-songs-anxods"
+KAGGLE_DIR     = ROOT / "data" / "kaggle" / "data"
+
+console = Console()
+
+
+# ===========================================================================
+# CSV — lecture des métadonnées Spotify
+# ===========================================================================
+
+def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Retourne la première colonne du DataFrame qui correspond à une des candidates."""
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def get_csv_files(csv_path: str | Path) -> list[Path]:
+    """Retourne la liste des CSV à traiter (fichier unique ou tous les CSV d'un dossier)."""
+    p = Path(csv_path)
+    if p.is_dir():
+        csvs = sorted(p.glob("*.csv"))
+        if not csvs:
+            console.print(f"[red]Aucun fichier CSV trouvé dans {p}[/red]")
+            sys.exit(1)
+        return csvs
+    if not p.exists():
+        console.print(f"[red]Fichier introuvable : {p}[/red]")
+        sys.exit(1)
+    return [p]
+
+
+def normalize_title(title: str) -> str:
+    """
+    Normalise un titre pour la déduplication.
+
+    Supprime les marqueurs de version (Taylor's Version, Radio Edit, Live…)
+    sans toucher aux feats ni aux remixes.
+    """
+    t = title.strip()
+    t = re.sub(r"\s*\([^)]*version\b[^)]*\)", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*\(from the vault\)", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*-\s*live\b.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*\((radio edit|single version|album version)\)", "", t, flags=re.IGNORECASE)
+    return t.strip()
+
+
+def load_tracks_from_csv(csv_path: Path) -> list[dict]:
+    """Lit un CSV Kaggle et retourne tous les titres uniques (artist + title)."""
+    df = pd.read_csv(csv_path)
+    title_col  = find_column(df, POSSIBLE_TITLE_COLS)
+    artist_col = find_column(df, POSSIBLE_ARTIST_COLS)
+
+    if title_col is None or artist_col is None:
+        console.print(f"[red]Colonnes titre/artiste introuvables dans {csv_path}[/red]")
+        return []
+
+    df = df[[title_col, artist_col]].dropna()
+    df["_title_norm"] = df[title_col].apply(normalize_title)
+    df = df.drop_duplicates(subset=["_title_norm", artist_col])
+    df = df.drop(columns=["_title_norm"])
+
+    tracks = []
+    for row in df.itertuples(index=False):
+        title  = str(getattr(row, title_col)).strip()
+        artist = str(getattr(row, artist_col)).strip()
+        if artist.startswith("["):
+            artist = re.sub(r"[\[\]'\"]", "", artist).split(",")[0].strip()
+        tracks.append({"title": title, "artist": artist, "source": csv_path.name})
+
+    return tracks
+
+
+def download_kaggle_csvs() -> None:
+    """Télécharge automatiquement les CSV Kaggle si pas déjà présents."""
+    if KAGGLE_DIR.exists() and list(KAGGLE_DIR.glob("*.csv")):
+        console.print(f"[green]CSV Kaggle déjà présents dans {KAGGLE_DIR}[/green]")
+        return
+
+    console.print("[bold]Téléchargement des CSV Kaggle...[/bold]")
+    KAGGLE_DIR.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            ["kaggle", "datasets", "download", "-d", KAGGLE_DATASET, "-p", tmpdir, "--unzip"],
+            timeout=120,
+        )
+        if result.returncode != 0:
+            console.print("[red]Échec du téléchargement Kaggle. Vérifie ta clé API kaggle.json.[/red]")
+            sys.exit(1)
+
+        for csv_file in Path(tmpdir).rglob("*.csv"):
+            dest = KAGGLE_DIR / csv_file.name
+            dest.write_bytes(csv_file.read_bytes())
+            console.print(f"  [green]✓[/green] {csv_file.name}")
+
+    console.print(f"[green]CSV téléchargés dans {KAGGLE_DIR}[/green]\n")
+
+
+# ===========================================================================
+# Utilitaires méthode
+# ===========================================================================
+
+def get_method_key(method: str) -> str:
+    """
+    Retourne la clé complète identifiant la méthode ET le modèle.
+
+    Exemples :
+        "mfcc" → "mfcc"
+        "clap" → "clap:laion/clap-htsat-unfused"
+        "muq"  → "muq:OpenMuQ/MuQ-large-msd-iter"
+    """
+    if method == "clap":
+        return f"clap:{config.CLAP_MODEL_NAME}"
+    if method == "muq":
+        return f"muq:{config.MUQ_MODEL_NAME}"
+    return method
+
+
+def load_already_processed(method: str) -> set[tuple[str, str]]:
+    """
+    Retourne l'ensemble des (artist, title) déjà traités pour la méthode donnée.
+    Source de vérité : colonne embedded_methods dans metadata.parquet.
+    """
+    meta_path = PROCESSED_DIR / "metadata.parquet"
+    if not meta_path.exists():
+        return set()
+
+    df_meta = pd.read_parquet(meta_path)
+    if "embedded_methods" not in df_meta.columns:
+        return set()
+    if "artist" not in df_meta.columns or "title" not in df_meta.columns:
+        return set()
+
+    method_key = get_method_key(method)
+    return {
+        (str(r.artist).lower(), str(r.title).lower())
+        for r in df_meta.itertuples()
+        if (hasattr(r.embedded_methods, "__iter__")
+            and not isinstance(r.embedded_methods, str)
+            and method_key in r.embedded_methods)
+    }
+
+
+# ===========================================================================
+# Pipeline RAM — sauvegarde immédiate après chaque track
+# ===========================================================================
+
+def _save_track(
+    track_id: str,
+    method: str,
+    track_embeddings: list,
+    track_segments: list[dict],
+    new_fp_hashes: set | None,
+    metadata_row: dict,
+    collection,
+    fp_db: Path,
+    meta_path: Path,
+) -> None:
+    """
+    Sauvegarde un track dans ChromaDB + SQLite + metadata.parquet.
+
+    En cas de crash partiel précédent (track_id déjà présent), les anciens
+    segments sont supprimés et réécrits proprement — jamais de doublon.
+    """
+    new_emb = np.vstack(track_embeddings).astype(np.float32)
+
+    # Supprimer les anciens segments si crash partiel
+    existing = collection.get(where={"track_id": {"$eq": track_id}})
+    if existing["ids"]:
+        collection.delete(ids=existing["ids"])
+
+    collection.add(
+        embeddings=new_emb.tolist(),
+        ids=[f"{track_id}_{i}" for i in range(len(new_emb))],
+        metadatas=[
+            {"track_id": track_id, "start_s": float(s["start_s"])}
+            for s in track_segments
+        ],
+    )
+
+    if new_fp_hashes is not None:
+        fp_save(fp_db, track_id, new_fp_hashes)
+
+    if meta_path.exists():
+        df_meta = pd.read_parquet(meta_path)
+        if track_id in set(df_meta["track_id"]):
+            idx = df_meta.index[df_meta["track_id"] == track_id][0]
+            current = df_meta.at[idx, "embedded_methods"]
+            current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
+            method_key = get_method_key(method)
+            if method_key not in current:
+                df_meta.at[idx, "embedded_methods"] = current + [method_key]
+        else:
+            df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
+    else:
+        df_meta = pd.DataFrame([metadata_row])
+
+    atomic_write_parquet(meta_path, df_meta)
+
+
+def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
+    """
+    Pipeline principal : télécharge l'audio en RAM, calcule embeddings + fingerprints,
+    sauvegarde dans ChromaDB / fingerprints.db / metadata.parquet.
+
+    La sauvegarde est immédiate après chaque track — reprise propre sur interruption.
+    """
+    torch.set_num_threads(4)
+
+    method = config.EMBEDDING_METHOD
+
+    batch_size = {"clap": config.CLAP_BATCH_SIZE,
+                  "muq":  config.MUQ_BATCH_SIZE,
+                  "mert": config.MERT_BATCH_SIZE}.get(method, 1)
+    load_sr    = {"clap": config.CLAP_SAMPLE_RATE,
+                  "muq":  config.MUQ_SAMPLE_RATE,
+                  "mert": config.MERT_SAMPLE_RATE}.get(method, config.SAMPLE_RATE)
+    win_s      = config.SEGMENT_WIN_S
+    hop_s      = config.SEGMENT_HOP_S
+    min_win    = config.SEGMENT_MIN_WIN
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+
+    fp_db     = FEATURES_DIR / "fingerprints.db"
+    meta_path = PROCESSED_DIR / "metadata.parquet"
+
+    # Migration automatique fingerprints.pkl → fingerprints.db (one-shot)
+    fp_pkl = FEATURES_DIR / "fingerprints.pkl"
+    if fp_pkl.exists() and not fp_db.exists():
+        console.print("[yellow]Migration fingerprints.pkl → fingerprints.db…[/yellow]")
+        n = fp_migrate_from_pkl(fp_pkl, fp_db)
+        console.print(f"[green]✓ {n} fingerprints migrés.[/green]")
+
+    fp_init(fp_db)
+    existing_fp_ids: set[str] = fp_load_ids(fp_db)
+
+    collection_key = config.get_collection_key(method)
+    chroma_client  = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
+    collection     = chroma_client.get_or_create_collection(
+        name=collection_key, metadata={"hnsw:space": "cosine"},
+    )
+
+    if torch.cuda.is_available():
+        device       = "cuda"
+        device_label = "[bold green]GPU (CUDA)[/bold green]"
+    elif torch.backends.mps.is_available():
+        device       = "mps"
+        device_label = "[bold green]GPU (MPS — Apple Silicon)[/bold green]"
+    else:
+        device       = "cpu"
+        device_label = "[yellow]CPU[/yellow]"
+
+    console.print(Panel(
+        f"[bold]Sources  :[/bold] {', '.join(csv_sources)}\n"
+        f"[bold]Méthode  :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Device   :[/bold] {device_label}\n"
+        f"[bold]Tracks   :[/bold] {len(tracks)}\n"
+        f"[bold]Mode     :[/bold] [green]RAM (aucun fichier audio stocké)[/green]",
+        title="[bold cyan]Download + Build Pipeline[/bold cyan]",
+        expand=False,
+    ))
+
+    # Pré-chargement modèle
+    if method == "clap":
+        from src.features.embeddings_audio import _load_clap
+        console.print(f"[cyan]Chargement du modèle {config.CLAP_MODEL_NAME} sur {device}...[/cyan]")
+        _load_clap(config.CLAP_MODEL_NAME, device=device)
+        console.print("[green]✓ Modèle CLAP prêt.[/green]\n")
+    elif method == "muq":
+        from src.features.embeddings_audio import _load_muq
+        console.print(f"[cyan]Chargement du modèle {config.MUQ_MODEL_NAME} sur {device}...[/cyan]")
+        _load_muq(config.MUQ_MODEL_NAME, device=device)
+        console.print("[green]✓ Modèle MuQ prêt.[/green]\n")
+    elif method == "mert":
+        from src.features.embeddings_audio import _load_mert
+        console.print(f"[cyan]Chargement du modèle {config.MERT_MODEL_NAME} sur {device}...[/cyan]")
+        _load_mert(config.MERT_MODEL_NAME, device=device)
+        console.print("[green]✓ Modèle MERT prêt.[/green]\n")
+
+    saved_count = 0
+    progress_columns = [
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+    ]
+
+    with Progress(*progress_columns, console=console) as progress:
+        dataset_task = (
+            progress.add_task("[cyan]Tracks", total=len(tracks))
+            if config.PROGRESS_DATASET else None
+        )
+        dl_status_task = progress.add_task("[yellow]⬇ En attente...", total=None)
+        track_task = (
+            progress.add_task("", total=1, visible=False)
+            if config.PROGRESS_TRACK else None
+        )
+
+        def _download_task(track: dict) -> tuple:
+            tmpdir, audio_path, url, dl_error = download_audio_search(
+                track["artist"], track["title"]
+            )
+            return tmpdir, audio_path, url, track, dl_error
+
+        lookahead  = config.DOWNLOAD_WORKERS + 2
+        track_iter = iter(tracks)
+        dl_pool    = ThreadPoolExecutor(max_workers=config.DOWNLOAD_WORKERS)
+
+        try:
+            pending: set = set()
+            for t in track_iter:
+                pending.add(dl_pool.submit(_download_task, t))
+                if len(pending) >= lookahead:
+                    break
+
+            while pending:
+                finished, pending = fut_wait(pending, return_when=FIRST_COMPLETED)
+
+                slots = lookahead - len(pending)
+                for t in track_iter:
+                    pending.add(dl_pool.submit(_download_task, t))
+                    slots -= 1
+                    if slots <= 0:
+                        break
+
+                for future in finished:
+                    tmpdir, audio_path, youtube_url, track, dl_error = future.result()
+                    artist = track["artist"]
+                    title  = track["title"]
+                    label  = f"{artist} — {title}"
+
+                    if audio_path is None:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        console.print(f"[red]  ✗ [{ts}] {label} — {dl_error}[/red]")
+                        if dataset_task is not None:
+                            progress.advance(dataset_task)
+                        continue
+
+                    progress.update(dl_status_task, description=f"[yellow]⬇ {label[:55]}")
+
+                    try:
+                        waveform, sr = librosa.load(audio_path, sr=load_sr, mono=True)
+                    except Exception:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        console.print(f"[red]  ✗ [{ts}] Échec lecture audio : {label}[/red]")
+                        if dataset_task is not None:
+                            progress.advance(dataset_task)
+                        continue
+                    finally:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+
+                    track_id = hashlib.md5(
+                        f"{artist.lower()}_{title.lower()}".encode()
+                    ).hexdigest()
+
+                    if sr != config.SAMPLE_RATE:
+                        _wf_std  = librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                        duration_s = len(_wf_std) / config.SAMPLE_RATE
+                    else:
+                        duration_s = len(waveform) / sr
+
+                    metadata_row = {
+                        "track_id":         track_id,
+                        "title":            title,
+                        "artist":           artist,
+                        "duration":         duration_s,
+                        "source":           track["source"],
+                        "url":              youtube_url,
+                        "embedded_methods": [get_method_key(method)],
+                        "album":            None,
+                        "release_date":     None,
+                        "genre":            None,
+                        "cover_url":        None,
+                    }
+
+                    new_fp_hashes: set | None = None
+                    if method not in ("muq", "clap") and track_id not in existing_fp_ids:
+                        waveform_fp = (
+                            librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                            if sr != config.SAMPLE_RATE else waveform
+                        )
+                        new_fp_hashes = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+                        existing_fp_ids.add(track_id)
+
+                    segs = list(iter_segments(waveform, sr, win_s, hop_s, min_win))
+
+                    if track_task is not None:
+                        progress.update(
+                            track_task,
+                            description=f"[green]{label[:50]}",
+                            total=len(segs),
+                            completed=0,
+                            visible=True,
+                        )
+
+                    track_embeddings: list = []
+                    track_segments:   list = []
+
+                    if method in ("muq", "clap", "mert"):
+                        for i in range(0, len(segs), batch_size):
+                            batch = segs[i : i + batch_size]
+                            if method == "muq":
+                                embs = muq_batch_embeddings(
+                                    [seg for _, seg in batch], sr=sr,
+                                    model_name=config.MUQ_MODEL_NAME,
+                                )
+                            elif method == "mert":
+                                from src.features.embeddings_audio import mert_batch_embeddings
+                                embs = mert_batch_embeddings(
+                                    [seg for _, seg in batch], sr=sr,
+                                    model_name=config.MERT_MODEL_NAME,
+                                )
+                            else:
+                                embs = clap_batch_embeddings(
+                                    [seg for _, seg in batch], sr=sr,
+                                    model_name=config.CLAP_MODEL_NAME,
+                                )
+                            for j, (start_s, _) in enumerate(batch):
+                                track_embeddings.append(embs[j])
+                                track_segments.append({"track_id": track_id, "start_s": float(start_s)})
+                            if track_task is not None:
+                                progress.advance(track_task, advance=len(batch))
+                    else:
+                        for start_s, seg in segs:
+                            emb = embed_segment(
+                                seg, sr, method=method,
+                                clap_model_name=config.CLAP_MODEL_NAME,
+                                muq_model_name=config.MUQ_MODEL_NAME,
+                            )
+                            track_embeddings.append(emb)
+                            track_segments.append({"track_id": track_id, "start_s": float(start_s)})
+                            if track_task is not None:
+                                progress.advance(track_task)
+
+                    if method in ("muq", "clap", "mert") and track_id not in existing_fp_ids:
+                        waveform_fp = (
+                            librosa.resample(waveform, orig_sr=sr, target_sr=config.SAMPLE_RATE)
+                            if sr != config.SAMPLE_RATE else waveform
+                        )
+                        new_fp_hashes = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
+                        existing_fp_ids.add(track_id)
+
+                    if track_task is not None:
+                        progress.update(track_task, visible=False)
+
+                    if track_embeddings:
+                        _save_track(
+                            track_id, method,
+                            track_embeddings, track_segments,
+                            new_fp_hashes, metadata_row,
+                            collection, fp_db, meta_path,
+                        )
+                        saved_count += 1
+
+                    if dataset_task is not None:
+                        progress.advance(dataset_task)
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interruption — annulation des téléchargements en cours...[/yellow]")
+            for f in pending:
+                f.cancel()
+            dl_pool.shutdown(wait=False, cancel_futures=True)
+            console.print(f"[green]{saved_count} track(s) déjà sauvegardé(s).[/green]")
+            sys.exit(0)
+        finally:
+            dl_pool.shutdown(wait=False)
+
+    if saved_count == 0:
+        console.print("[red]Aucun morceau traité — pipeline annulé.[/red]")
+        sys.exit(1)
+
+    total_meta = len(pd.read_parquet(meta_path)) if meta_path.exists() else 0
+    total_seg  = collection.count()
+    sample     = collection.get(limit=1, include=["embeddings"])
+    emb_list   = sample.get("embeddings")
+    emb_dim    = len(emb_list[0]) if emb_list is not None and len(emb_list) > 0 else "?"
+
+    console.print(Panel(
+        f"[bold]Nouveaux tracks  :[/bold] {saved_count}\n"
+        f"[bold]Total en base    :[/bold] {total_meta}\n"
+        f"[bold]Total segments   :[/bold] {total_seg}\n"
+        f"[bold]Embedding dim    :[/bold] {emb_dim}\n"
+        f"[bold]Fingerprints     :[/bold] {len(existing_fp_ids)} tracks",
+        title="[bold green]Embeddings + Fingerprints — OK[/bold green]",
+        expand=False,
+    ))
+
+
+# ===========================================================================
+# Point d'entrée public
+# ===========================================================================
+
+def run_ingest(csv_paths: tuple[str, ...] | None = None) -> None:
+    """
+    Lit les CSV Kaggle, télécharge l'audio en RAM et construit la base.
+
+    Args:
+        csv_paths: tuple de chemins CSV ou dossiers. Si None ou vide,
+                   utilise automatiquement tous les CSV Kaggle disponibles.
+    """
+    if not csv_paths:
+        download_kaggle_csvs()
+        csv_files = get_csv_files(str(KAGGLE_DIR))
+    else:
+        csv_files = []
+        for p in csv_paths:
+            csv_files.extend(get_csv_files(p))
+
+    console.print(f"[bold]{len(csv_files)} fichier(s) CSV détecté(s) :[/bold]")
+    for f in csv_files:
+        console.print(f"  • {f}")
+
+    method = config.EMBEDDING_METHOD
+    already_processed = load_already_processed(method)
+    if already_processed:
+        console.print(f"\n[yellow]{len(already_processed)} morceau(x) déjà traité(s) avec '{method}' → ignorés[/yellow]")
+
+    all_tracks = []
+    seen       = set()
+    skipped    = 0
+    for csv_file in csv_files:
+        for t in load_tracks_from_csv(csv_file):
+            key = (t["artist"].lower(), t["title"].lower())
+            if key in already_processed:
+                skipped += 1
+                continue
+            if key not in seen:
+                seen.add(key)
+                all_tracks.append(t)
+
+    if skipped > 0:
+        console.print(f"[yellow]{skipped} morceau(x) ignoré(s) (déjà dans la base)[/yellow]")
+
+    csv_sources = [f.name for f in csv_files]
+
+    if not all_tracks:
+        console.print("[green]Tous les morceaux sont déjà dans la base.[/green]")
+    else:
+        console.print(f"\n[bold]{len(all_tracks)} nouveaux morceaux à traiter.[/bold]\n")
+        process_in_ram(all_tracks, csv_sources)
+
+    # Construction de l'index FAISS — toujours à la fin
+    from src.index.build_index import _build_for_method
+    chroma_client = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
+    collection_key = config.get_collection_key(method)
+    console.print("\n[bold]▶ Construction de l'index FAISS[/bold]")
+    _build_for_method(collection_key, config.INDEX_TYPE, chroma_client)

@@ -428,31 +428,152 @@ python scripts/benchmark_noise_robustness.py --label "A7_larger_clap"
 
 ---
 
-### A8 — MERT (`m-a-p/MERT-v1-95M`)
-**Objectif** : Tester un modèle entraîné **exclusivement sur de la musique** (vs CLAP qui est audio général).  
-**Modèle** : `m-a-p/MERT-v1-95M` (95M params, compatible MPS) ou `m-a-p/MERT-v1-330M` (330M, plus lent)  
-**Hypothèse** : MERT capture des features musicales de bas niveau (hauteur, rythme, timbre) potentiellement plus robustes aux dégradations micro qu'un modèle audio généraliste.
+### ✅ A8 — MERT (`m-a-p/MERT-v1-95M`) (13/04/2026)
+**Objectif** : Tester un modèle entraîné **exclusivement sur de la musique** (vs CLAP audio général).  
+**Modèle** : `m-a-p/MERT-v1-95M` (95M params) — implémenté dans `src/features/embeddings_audio.py`  
+**Collection ChromaDB** : `mert_MERT_v1_95M` | **Index** : `index_mert_MERT_v1_95M_flat.faiss`
 
-**Procédure** :
-1. Ajouter `"mert"` comme méthode dans `src/features/embeddings_audio.py` et `src/config.py`
-2. `python scripts/download_music.py --csv ...` → crée collection `mert_MERT_v1_95M`
-3. `python src/index/build_index.py`
-4. `python scripts/find_flowers.py --audio data/raw/93-Rue-Belliard.mp3 --method mert`
-5. `python scripts/benchmark_noise_robustness.py --label "A8_mert"`
+**Résultats `find_flowers.py` (MIC réel 93-Rue-Belliard.mp3)** :
 
-**Compatibilité** : MPS ✅, CPU ✅, CUDA ✅
+| Condition | Rang Flowers | Score FAISS |
+|-----------|-------------|-------------|
+| Audio micro réel | **#212** ❌ | — |
+| Audio propre (extrait studio) | **#1** ✅ | — |
 
----
+**Observations :**
+- Sur audio propre : MERT trouve Flowers en #1 → le modèle fonctionne bien en conditions idéales
+- Sur micro réel : #212, pire que CLAP htsat-unfused (#70) — MERT est plus sensible à la dégradation
+- MERT ne supporte pas Float16 sur CPU/MPS → CUDA uniquement en production ; lent sur Mac
 
-### A9 — Augmentation avec vraies bases de dégradation audio
-**Objectif** : Remplacer les augmentations synthétiques par de vraies Room Impulse Responses (RIR) et bruits réels.
-
-**Bases de données à tester** :
-- **MUSAN** — bruits réels (rue, bureau, café) — https://openslr.org/17/
-- **BUT Speech@FIT Reverb Database** — RIR de vraies salles
-- **MIT Impulse Response Survey** — RIR de 20 types de salles
+**Conclusion** : `clap-htsat-unfused` > `MERT-v1-95M` pour la robustesse micro sur ce dataset. MERT écarté.
 
 ---
 
-*Dernière mise à jour : 12/04/2026*
-*État : MIC réel toujours non résolu. Root cause : espace CLAP trop éloigné du signal micro, quelle que soit la taille du modèle. Prochaine piste prioritaire : A8 (MERT) — modèle musique-spécifique.*
+### ✅ A9 — Augmentation RIR synthétique sur toute la base (13/04/2026)
+**Objectif** : Ajouter dans ChromaDB des embeddings de versions "de salle" pour toute la base (820 tracks), pas seulement Flowers.  
+**Script** : `scripts/augment_with_rir.py`  
+**RIRs synthétiques générées** (5 profils, aucun fichier WAV extérieur requis) :
+
+| RIR | RT60 | Simulation |
+|-----|------|-----------|
+| `synth_bathroom_rt15ms` | 150 ms | Petite pièce carrelée |
+| `synth_small_room_rt25ms` | 250 ms | Petite chambre |
+| `synth_office_rt40ms` | 400 ms | Bureau ouvert |
+| `synth_living_room_rt60ms` | 600 ms | Salon |
+| `synth_classroom_rt80ms` | 800 ms | Salle de classe |
+
+**Résultat base ChromaDB** :
+- 56 415 vecteurs originaux + 282 075 vecteurs RIR = **338 490 vecteurs au total**
+- 5 RIRs × 820 tracks × ~69 segments/track (moyenne)
+
+**Impact mesuré sur Flowers MIC réel (avant preprocessing audio)** :
+- Flowers seul (5 RIRs) : #70 → #50, score 2.98 → 5.16 (gap 27.7× → 16.0×)
+- Toute la base (5 RIRs) : position à mesurer après preprocessing
+
+**Script utilitaires associés** :
+- `scripts/delete_rir.py` — supprime les vecteurs RIR d'une méthode sans toucher les originaux
+- `scripts/test_rir_impact.py` — mesure l'impact des RIR sans supprimer la base
+
+---
+
+### ✅ B1 — Preprocessing audio requête : LUFS + filtre passe-haut (13/04/2026)
+**Objectif** : Améliorer la qualité de la requête audio avant embedding, sans modifier la base.  
+**Implémentation** : `src/audio/preprocessing.py` → `preprocess_query(waveform, sr)`  
+**Appliqué dans** : `src/retrieval/query_pipeline.py` (pipeline principal) + `scripts/find_flowers.py`
+
+**Pipeline de prétraitement (< 10 ms sur 15s audio)** :
+1. **Filtre passe-haut Butterworth ordre 4 à 80 Hz** — supprime grondements micro, HVAC, vent
+2. **Normalisation LUFS à −14 LUFS** (`pyloudnorm`) — aligne le niveau sur la base d'entraînement de CLAP
+3. **Peak normalization à 0.95** — sécurité anti-saturation
+
+**Résultats `find_flowers.py` (MIC réel, CLAP htsat-unfused, base avec RIR)** :
+
+| Condition | Rang Flowers | Score FAISS |
+|-----------|-------------|-------------|
+| Sans preprocessing | #64 ❌ | — |
+| Avec LUFS + HP 80Hz | **#6** ✅ | 22.68 |
+
+**Amélioration : #64 → #6** (+58 rangs). Le problème principal était la **normalisation de volume** : CLAP est entraîné sur des audios normalisés, les variations de niveau dégradaient directement la qualité des embeddings.
+
+**Librairie ajoutée** : `pyloudnorm==0.2.0` (requirements.txt)  
+**Config** : `OPT_QUERY_DENOISE = False` dans `src/config.py` (flag pour activer/désactiver noisereduce)
+
+---
+
+### ❌ B2 — noisereduce non-stationnaire sur la requête (13/04/2026)
+**Objectif** : Tester le débruitage spectral en plus du preprocessing LUFS+HP.  
+**Paramètres** : `stationary=False`, `prop_decrease=0.75`, `n_fft=2048`, `n_jobs=-1`
+
+**Résultats** :
+
+| Condition | Rang Flowers |
+|-----------|-------------|
+| LUFS + HP seuls (B1) | #6 |
+| + noisereduce | **#36** ❌ |
+
+**Conclusion** : noisereduce dégrade massivement les embeddings CLAP même à `prop_decrease=0.75`. CLAP est entraîné sur de l'audio "naturel" — la modification spectrale par noisereduce perturbe l'espace d'embedding même partiellement. **`OPT_QUERY_DENOISE = False` conservé.**
+
+---
+
+### ✅ B3 — Mesure de l'impact RIR post-preprocessing (13/04/2026)
+**Objectif** : Quantifier la contribution des RIR dans la base après l'amélioration B1.  
+**Script** : `scripts/test_rir_impact.py` — construit un index temporaire sans RIR en mémoire, compare.
+
+**Résultats (MIC réel, avec preprocessing B1)** :
+
+| Condition | Rang Flowers | Score FAISS | Vecteurs index |
+|-----------|-------------|-------------|---------------|
+| Sans RIR | #18 | 14.42 | 56 415 |
+| Avec RIR | **#6** | **22.68** | 338 490 |
+
+**Les RIR apportent +12 rangs** (#18 → #6) et +57% de score FAISS (14.42 → 22.68). L'augmentation RIR est **complémentaire** du preprocessing : le preprocessing normalise le niveau, les RIR rapprochent l'espace vectoriel du signal de salle.
+
+---
+
+### ✅ B4 — Corrections fingerprinting Stage 2 (13/04/2026)
+**Deux bugs corrigés dans le pipeline de fingerprinting :**
+
+#### Bug 1 — `FP_SCORE_WEIGHT` non appliqué
+`score_final = score_faiss * (1 + score_fp)` au lieu de `score_faiss * (1 + score_fp * FP_SCORE_WEIGHT)`.  
+Le poids `FP_SCORE_WEIGHT = 10.0` défini dans `config.py` était ignoré → le fingerprint avait 10× moins d'influence que prévu.
+
+**Fix** : `src/retrieval/query_pipeline.py` ligne 164.
+
+#### Bug 2 — Pas d'alignement temporel (hashes v1 → v2)
+Les hashes v1 `(f1, f2, delta_t)` ne permettaient pas de distinguer les vrais matches des coïncidences.  
+La similarité faisait une simple intersection → score de 0.0983 sur audio bruité.
+
+**Fix** : hashes v2 `(f1, f2, delta_t, t1_anchor)` + histogramme d'offsets dans `fingerprint_similarity` :
+- Pour chaque hash commun, `offset = t1_db - t1_query`
+- Les vrais matches s'accumulent au même offset → score = `max(histogram) / len(fp_query)`
+- Les coïncidences ont des offsets aléatoires → filtrées
+
+**Rebuild requis** : `python scripts/rebuild_fingerprints.py` (re-télécharge et recalcule en v2)
+
+**Résultat attendu** : score fingerprint significativement plus élevé sur audio bruité (le score de 0.0983 était majoritairement du bruit de coïncidences).
+
+---
+
+## Récapitulatif global (état au 13/04/2026)
+
+```
+baseline (A0)             ████████░░░░░░  57.1% (8/14)   MIC=#8   ← point de départ
+A4 (data augment. bruit)  ████████████░░  85.7% (12/14)  MIC=#8   ← meilleure amélioration
+A8 (MERT)                 —              —               MIC=#212 ← pire que CLAP
+A9 (RIR synthétique ×5)   —              —               MIC=#18  ← sans preprocessing
+B1 (LUFS + HP 80Hz)       —              —               MIC=#6 ✅ ← breakthrough
+B1+B3 (LUFS+HP + RIR)     —              —               MIC=#6 ✅  score +57%
+B2 (noisereduce)          —              —               MIC=#36  ← régression abandonnée
+B4 (FP alignement v2)     —              —               en cours (rebuild fingerprints)
+```
+
+**Breakthrough** : le preprocessing LUFS + passe-haut 80 Hz a résolu le problème MIC réel (#64 → #6) en < 10 ms et sans modifier la base. Les RIR synthétiques contribuent en plus (+12 rangs supplémentaires).
+
+**Prochaines étapes** :
+- Terminer le rebuild fingerprints v2 (`rebuild_fingerprints.py`) et mesurer l'impact sur le Stage 2
+- Lancer un benchmark complet (5 cas) pour mesurer l'accuracy globale après B1+B3+B4
+
+---
+
+*Dernière mise à jour : 13/04/2026*  
+*État : MIC réel résolu (#6). Root cause était la normalisation de volume (LUFS). Les RIR amplifient encore l'effet.*

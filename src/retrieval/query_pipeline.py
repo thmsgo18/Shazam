@@ -3,7 +3,11 @@ src/retrieval/query_pipeline.py
 
 Pipeline complet d'identification d'un morceau à partir d'un extrait audio.
 Orchestre : chargement audio → embeddings → FAISS → re-ranking fingerprint.
-Responsable : Personne C
+
+Stratégie de classement final (cascade) :
+  - Clé primaire   : score fingerprint (DESC) — source de vérité
+  - Clé secondaire : score FAISS (DESC)       — fallback si FP=0 pour tous
+Aucun mélange des deux scores : le FP décide seul quand il a un signal.
 """
 
 from __future__ import annotations
@@ -24,8 +28,11 @@ torch.set_num_threads(4)
 from concurrent.futures import ThreadPoolExecutor
 
 import src.config as config
+
+ROOT = Path(__file__).resolve().parents[2]
+
 from src.audio.loading import load_audio
-from src.audio.preprocessing import iter_segments
+from src.audio.preprocessing import iter_segments, preprocess_query
 from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
 from src.retrieval.searcher import load_searcher, search_segments, aggregate_by_track
 from src.features.fingerprint import extract_fingerprint, fingerprint_similarity
@@ -41,32 +48,26 @@ def identify_track(
     Identifie le morceau correspondant à un fichier audio.
 
     Pipeline en deux étapes :
-    - Stage 1 (Embeddings + FAISS) : cherche les N candidats les plus proches
-      dans l'index vectoriel. Rapide, mais approximatif.
-    - Stage 2 (Fingerprinting) : re-classe les candidats en comparant les
-      fingerprints de l'audio requête avec ceux des candidats.
-      Précis, mais plus lent — ne s'applique qu'aux N candidats du stage 1.
+    - Stage 1 (Embeddings + FAISS) : filtre les N candidats les plus proches
+      dans l'index vectoriel. Rapide mais approximatif — rôle de recall.
+    - Stage 2 (Fingerprinting) : classe les candidats par correspondance exacte
+      des pics spectraux + alignement temporel. Précis — rôle de precision.
+
+    Classement final en cascade :
+      1. score_fp  DESC  — le fingerprint décide (source de vérité)
+      2. score_faiss DESC — fallback si FP=0 pour tous (audio trop dégradé)
+    Aucun mélange des deux scores : le FP prime toujours quand il a un signal.
 
     Args:
         audio_path: chemin vers le fichier audio à identifier.
         method:     méthode d'embedding — None utilise config.EMBEDDING_METHOD.
         top_n:      nombre de résultats finaux à retourner.
-        detailed:   si True, retourne (track_id, score_final, score_faiss, score_fp)
-                    au lieu de (track_id, score_final).
+        detailed:   si True, retourne (track_id, score_fp, score_faiss, score_fp)
+                    au lieu de (track_id, score_fp).
 
     Returns:
-        Si detailed=False : [(track_id, score_final), ...]
-        Si detailed=True  : [(track_id, score_final, score_faiss, score_fp), ...]
-
-    Dépendances :
-        - src.audio.loading.load_audio()
-        - src.audio.preprocessing.iter_segments()
-        - src.features.embeddings_audio.embed_segment()
-        - src.retrieval.searcher.load_searcher()
-        - src.retrieval.searcher.search_segments()
-        - src.retrieval.searcher.aggregate_by_track()
-        - src.features.fingerprint.extract_fingerprint()
-        - src.features.fingerprint.fingerprint_similarity()
+        Si detailed=False : [(track_id, score_fp), ...]
+        Si detailed=True  : [(track_id, score_fp, score_faiss, score_fp), ...]
     """
     if method is None:
         method = config.EMBEDDING_METHOD # Si pas de méthode donnée on utilise celle du config.
@@ -83,7 +84,8 @@ def identify_track(
 
     index, segments = load_searcher(method) # Charge l'index FAISS et le .parquet pour la correspondance.
 
-    waveform, sr = load_audio(path= audio_path, target_sr= targ_sr) # Chargement de l'audio.
+    waveform, sr = load_audio(path=audio_path, target_sr=targ_sr)  # Chargement de l'audio.
+    waveform = preprocess_query(waveform, sr)                       # Prétraitement : HP 80Hz + LUFS -14 + peak norm
 
     # Découpage de l'audio en segments
     segment_list = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
@@ -124,14 +126,6 @@ def identify_track(
 
     # ---------- Stage 2 (Fingerprinting) : ----------
 
-    # Court-circuit : si le 1er candidat est très largement devant, inutile de faire le fingerprinting
-    if config.OPT_SHORTCIRCUIT and len(candidates) >= 2:
-        if candidates[1][1] > 0 and candidates[0][1] / candidates[1][1] >= config.OPT_SHORTCIRCUIT_RATIO:
-            top = candidates[:top_n]
-            if detailed:
-                return [(tid, score, score, 0.0) for tid, score in top]
-            return [(tid, score) for tid, score in top]
-
     # Calcul du fingerprint de la requête — toujours à SAMPLE_RATE pour cohérence avec les fingerprints stockés
     if targ_sr != config.SAMPLE_RATE:
         waveform_fp = librosa.resample(waveform, orig_sr=targ_sr, target_sr=config.SAMPLE_RATE)
@@ -141,7 +135,7 @@ def identify_track(
 
     # Fingerprints : chargement depuis SQLite uniquement pour les candidats
     # (plus efficace que charger tout le fichier — on ne lit que ~20 lignes sur 3000)
-    fp_db = Path(config.FINGERPRINTS_DB)
+    fp_db = ROOT / config.FINGERPRINTS_DB
 
     def _get_fp(track_id: str) -> set | None:
         if not fp_db.exists():
@@ -153,27 +147,31 @@ def identify_track(
         return pickle.loads(row[0]) if row else None
 
     def process_candidate(candidate):
-        """Récupère le fingerprint d'un candidat et calcule les scores détaillés."""
+        """Récupère le fingerprint d'un candidat et retourne ses scores détaillés."""
         track_id, score_faiss = candidate
         candidate_fp = _get_fp(track_id)
         if candidate_fp is None or len(candidate_fp) == 0:
-            # Fingerprint manquant ou vide — score neutre : on garde le classement FAISS intact.
-            return (track_id, score_faiss, score_faiss, 0.0)
+            # Fingerprint manquant ou vide : score FP à 0, FAISS servira de fallback.
+            return (track_id, score_faiss, 0.0)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
-        score_final = score_faiss * (1.0 + score_fp)
-        return (track_id, score_final, score_faiss, score_fp)
+        return (track_id, score_faiss, score_fp)
 
     if config.OPT_FINGERPRINT_PARALLEL:
         # Chargement et fingerprinting des candidats en parallèle
         with ThreadPoolExecutor(max_workers=4) as executor:
-            final_scores = list(executor.map(process_candidate, candidates))
+            scored = list(executor.map(process_candidate, candidates))
     else:
         # Traitement séquentiel (comportement de base)
-        final_scores = [process_candidate(c) for c in candidates]
+        scored = [process_candidate(c) for c in candidates]
 
-    final_scores.sort(key=lambda x: x[1], reverse=True)
-    top = final_scores[:top_n]
+    # ── Classement final en cascade ──────────────────────────────────────────
+    # Clé primaire   : score_fp  (DESC) — le fingerprint est la source de vérité
+    # Clé secondaire : score_faiss (DESC) — fallback si FP=0 pour tous les candidats
+    scored.sort(key=lambda x: (x[2], x[1]), reverse=True)
+
+    top = scored[:top_n]
 
     if detailed:
-        return top  # (track_id, score_final, score_faiss, score_fp)
-    return [(tid, score_final) for tid, score_final, _, __ in top]
+        # score_final = score_fp pour la cohérence avec le reste du code (évaluation, etc.)
+        return [(tid, score_fp, score_faiss, score_fp) for tid, score_faiss, score_fp in top]
+    return [(tid, score_fp) for tid, score_faiss, score_fp in top]

@@ -342,9 +342,132 @@ def muq_batch_embeddings(
 
     return emb
 
+# ******************** MERT : ********************
+
+_MERT_CACHE = {"model": None, "processor": None, "device": None, "model_name": None}
+
+def _load_mert(model_name: str, device: str | None = None):
+    """
+    Charge et met en cache un modèle MERT (Music undERstanding Transformer).
+    MERT est entraîné exclusivement sur de la musique → meilleure robustesse
+    aux variations timbrales (bruit micro, réverbération) que CLAP.
+
+    Args:
+        model_name: ex. "m-a-p/MERT-v1-95M" ou "m-a-p/MERT-v1-330M"
+        device: "cuda", "mps" ou "cpu". Détection automatique si None.
+
+    Returns:
+        (model, processor, device)
+    """
+    import torch
+    from transformers import Wav2Vec2FeatureExtractor, AutoModel
+
+    if _MERT_CACHE["model"] is not None and _MERT_CACHE["model_name"] == model_name:
+        return _MERT_CACHE["model"], _MERT_CACHE["processor"], _MERT_CACHE["device"]
+
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    if device == "mps":
+        import os
+        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+    import src.config as config
+    processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name, trust_remote_code=True)
+    dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True, torch_dtype=dtype).to(device)
+    model.eval()
+
+    _MERT_CACHE.update({"model": model, "processor": processor, "device": device, "model_name": model_name})
+    return model, processor, device
+
+
+def mert_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int = 24000, normalize: bool = True, eps: float = 1e-10) -> np.ndarray:
+    """
+    Calcule un embedding audio avec MERT (mean pooling sur last_hidden_state).
+
+    Returns:
+        np.ndarray: vecteur 1D de dimension 768 (MERT-v1-95M) ou 1024 (MERT-v1-330M).
+    """
+    import torch
+
+    if waveform is None or len(waveform) == 0:
+        return np.zeros((768,), dtype=np.float32)
+
+    y = np.asarray(waveform, dtype=np.float32)
+    if sr != target_sr:
+        y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+
+    model, processor, device = _load_mert(model_name=model_name)
+
+    inputs = processor(y, sampling_rate=target_sr, return_tensors="pt", padding=True)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        out = model(**inputs, output_hidden_states=False)
+        emb_t = out.last_hidden_state.mean(dim=1)   # (1, H)
+
+    emb = emb_t[0].detach().cpu().numpy().astype(np.float32)
+
+    if normalize:
+        norm = float(np.linalg.norm(emb))
+        emb = emb / max(norm, eps)
+
+    return emb
+
+
+def mert_batch_embeddings(
+    segments: list[np.ndarray],
+    sr: int,
+    model_name: str,
+    target_sr: int = 24000,
+    normalize: bool = True,
+    eps: float = 1e-10,
+) -> np.ndarray:
+    """
+    Calcule les embeddings MERT pour un batch de segments en un seul appel GPU.
+
+    Returns:
+        emb: (B, H) float32
+    """
+    import torch
+
+    if not segments:
+        return np.zeros((0, 768), dtype=np.float32)
+
+    model, processor, device = _load_mert(model_name=model_name)
+
+    resampled = []
+    for seg in segments:
+        y = np.asarray(seg, dtype=np.float32)
+        if sr != target_sr:
+            y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+        resampled.append(y)
+
+    inputs = processor(resampled, sampling_rate=target_sr, return_tensors="pt", padding=True)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        out = model(**inputs, output_hidden_states=False)
+        emb_t = out.last_hidden_state.mean(dim=1)   # (B, H)
+
+    emb = emb_t.detach().cpu().numpy().astype(np.float32)
+
+    if normalize:
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.maximum(norms, eps)
+
+    return emb
+
+
 # ******************** Embedding general : ********************
 
-def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model_name: str | None = None, clap_model_name: str | None = None) -> np.ndarray:
+def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model_name: str | None = None, clap_model_name: str | None = None, mert_model_name: str | None = None) -> np.ndarray:
     """
     Compute an audio embedding using the selected embedding method.
     This function routes the audio waveform to the appropriate embedding function based on the selected method (MFCC or CLAP).
@@ -352,15 +475,16 @@ def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model
     Args:
         waveform (np.ndarray): Input audio waveform as a 1D NumPy array.
         sr (int): Sampling rate of the audio signal.
-        method (str, optional): Embedding method to use ("mfcc", "clap" or "muq"). Default is "mfcc".
+        method (str, optional): Embedding method to use ("mfcc", "clap", "muq" or "mert"). Default is "mfcc".
         muq_model_name (str | None, optional): Name or path of the pretrained MuQ model. Required if method is "muq".
         clap_model_name (str | None, optional): Name or path of the pretrained CLAP model. Required if method is "clap".
+        mert_model_name (str | None, optional): Name or path of the pretrained MERT model. Required if method is "mert".
 
     Returns:
         np.ndarray: A 1D embedding vector produced by the selected method.
 
     Raises:
-        ValueError: If an unknown method is provided or if CLAP is selected without a model name.
+        ValueError: If an unknown method is provided or if a required model name is missing.
     """
     method = method.lower()
     if method == "mfcc":
@@ -373,4 +497,8 @@ def embed_segment(waveform: np.ndarray, sr: int, method: str = "mfcc", muq_model
         if clap_model_name is None:
             raise ValueError("clap_model_name is required when method='clap'")
         return clap_embedding(waveform, sr, model_name=clap_model_name)
+    if method == "mert":
+        if mert_model_name is None:
+            raise ValueError("mert_model_name is required when method='mert'")
+        return mert_embedding(waveform, sr, model_name=mert_model_name)
     raise ValueError(f"Unknown embedding method: {method}")

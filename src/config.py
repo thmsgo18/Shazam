@@ -52,8 +52,8 @@ VECTOR_TOP_N_RESULTS  = 10    # Nb de résultats finaux retournés à l'interfac
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "mfcc"                           # "mfcc" ou "clap" ou "muq"
-CLAP_MODEL_NAME  = "laion/larger_clap_music"        # "laion/clap-htsat-unfused"
+EMBEDDING_METHOD = "clap"                           # "mfcc" ou "clap" ou "muq" ou "mert"
+CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"        # "laion/clap-htsat-unfused" ou "laion/larger_clap_music"
 CLAP_SAMPLE_RATE = 48000
 
 MUQ_SAMPLE_RATE  = 24000
@@ -61,6 +61,11 @@ MUQ_MODEL_NAME   = "OpenMuQ/MuQ-large-msd-iter"
 MUQ_BATCH_SIZE   = 8
 
 CLAP_BATCH_SIZE  = 32   # À ajuster selon le GPU : trop grand = contre-productif sur MPS
+
+# Features — MERT
+MERT_MODEL_NAME  = "m-a-p/MERT-v1-95M"   # Ou "m-a-p/MERT-v1-330M" (plus grand, plus lent)
+MERT_SAMPLE_RATE = 24000
+MERT_BATCH_SIZE  = 8
 
 # Téléchargements parallèles (download_music.py)
 # Augmenter si connexion rapide, réduire si bans YouTube fréquents
@@ -71,8 +76,7 @@ DOWNLOAD_WORKERS = 5
 OPT_FLOAT16              = True   # Charger CLAP/MuQ en demi-précision (float16) → moins de RAM, plus rapide
 OPT_BATCH_EMBED          = True   # Embedder tous les segments en un seul batch dans identify_track
 OPT_FINGERPRINT_PARALLEL = True   # Charger et fingerprinter les candidats en parallèle (Stage 2)
-OPT_SHORTCIRCUIT         = True   # Court-circuiter le Stage 2 si le 1er candidat FAISS est évident
-OPT_SHORTCIRCUIT_RATIO   = 10.0  # Ratio score[0]/score[1] au-delà duquel on court-circuite
+OPT_QUERY_DENOISE        = False  # Débruitage spectral noisereduce (non-stationnaire) sur la requête audio
 
 # Affichage
 PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks
@@ -100,4 +104,7 @@ def get_collection_key(method: str = None) -> str:
     if method == "muq":
         model_slug = MUQ_MODEL_NAME.split("/")[-1].replace("-", "_")
         return f"muq_{model_slug}"
+    if method == "mert":
+        model_slug = MERT_MODEL_NAME.split("/")[-1].replace("-", "_")
+        return f"mert_{model_slug}"
     return method  # mfcc : pas de modèle externe

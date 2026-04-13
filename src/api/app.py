@@ -11,7 +11,6 @@ Usage :
 
 from __future__ import annotations
 
-import sys
 import warnings
 from pathlib import Path
 
@@ -22,12 +21,11 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from src.retrieval.query_pipeline import identify_track
 
-METADATA_PATH = Path("data/processed/metadata.parquet")
-console = Console()
+ROOT          = Path(__file__).resolve().parents[2]
+METADATA_PATH = ROOT / "data" / "processed" / "metadata.parquet"
+console       = Console()
 
 
 def _load_metadata() -> dict[str, dict]:

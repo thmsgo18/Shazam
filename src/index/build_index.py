@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import faiss
+
+ROOT = Path(__file__).resolve().parents[2]
 import numpy as np
 import pandas as pd
 
@@ -100,8 +102,9 @@ def _build_for_method(collection_key: str, index_type: str, chroma_client) -> No
     """
     import src.config as config
 
-    out_path   = Path(f"{config.INDEX_DIR}/index_{collection_key}_{index_type}.faiss")
-    order_path = Path(f"{config.INDEX_DIR}/segments_{collection_key}.parquet")
+    index_dir  = ROOT / config.INDEX_DIR
+    out_path   = index_dir / f"index_{collection_key}_{index_type}.faiss"
+    order_path = index_dir / f"segments_{collection_key}.parquet"
 
     try:
         collection = chroma_client.get_collection(name=collection_key)
@@ -168,7 +171,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     index_type    = getattr(config, "INDEX_TYPE", "flat")
-    chroma_client = chromadb.PersistentClient(path=config.CHROMA_DIR)
+    chroma_client = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
 
     if args.method:
         # L'utilisateur passe "clap", "mfcc", "muq" → on résout la clé collection

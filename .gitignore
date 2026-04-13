@@ -1,25 +1,83 @@
-# Python
+# ─── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Environnements virtuels
 venv/
 env/
 ENV/
+.venv/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
 *.ipynb_checkpoints/
 
-# Data files
-*.csv
-*.h5
-*.hdf5
-*.parquet
-data/*/*
-!data/*/.gitkeep
-datasets/
+# ─── Données (volumineuses, régénérables) ────────────────────────────────────
+# ChromaDB, FAISS, SQLite, embeddings, metadata
+data/chroma/
+data/features/
+data/index/
+data/processed/
 
-# IDE
+# Audio de test (data/raw/) — conservé hors git
+data/raw/
+
+# Fichiers CSV Kaggle téléchargés
+data/kaggle/
+
+# Placeholder .gitkeep autorisés
+!data/**/.gitkeep
+
+# ─── Résultats générés automatiquement ───────────────────────────────────────
+# Garder EXPERIMENTS.md (notes manuelles) mais ignorer les artefacts machines
+results/benchmark/
+results/eval/
+results/plots/
+
+# ─── Audio et modèles ────────────────────────────────────────────────────────
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.webm
+*.m4a
+
+# Fichiers FAISS et SQLite
+*.faiss
+*.db
+
+# Cache HuggingFace (global, pas dans le projet)
+.cache/
+
+# ─── Frontend ────────────────────────────────────────────────────────────────
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+
+# ─── IDE et OS ───────────────────────────────────────────────────────────────
 .vscode/
 .idea/
-
-# OS
+*.swp
+*.swo
 .DS_Store
+Thumbs.db
+
+# ─── Variables d'environnement ───────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Logs et temporaires ─────────────────────────────────────────────────────
+*.log
+*.tmp
+*.temp
+tmp/
+temp/

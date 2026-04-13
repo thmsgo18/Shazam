@@ -1,39 +1,34 @@
 """
-scripts/clean_database.py
+src/maintenance/clean.py
 
-Supprime toutes les données de la base : embeddings ChromaDB, index FAISS,
-fingerprints SQLite et metadata.parquet.
+Suppression complète de la base de données :
+embeddings ChromaDB, index FAISS, fingerprints SQLite et metadata.parquet.
 
-Usage :
-    python scripts/clean_database.py          # demande confirmation
-    python scripts/clean_database.py --yes    # supprime sans confirmation
+Point d'entrée public : run_clean(yes)
 """
 
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
-sys.path.insert(0, ".")
-
-import click
 from rich.console import Console
 from rich.table import Table
 
-import src.config as config
+from src import config
 
+ROOT    = Path(__file__).resolve().parents[2]
 console = Console()
 
 TARGETS = [
-    (Path(config.CHROMA_DIR),       "Embeddings ChromaDB",  "dossier"),
-    (Path(config.INDEX_DIR),        "Index FAISS",          "dossier"),
-    (Path(config.FINGERPRINTS_DB),  "Fingerprints SQLite",  "fichier"),
-    (Path(config.METADATA_PATH),    "Metadata parquet",     "fichier"),
+    (ROOT / config.CHROMA_DIR,      "Embeddings ChromaDB", "dossier"),
+    (ROOT / config.INDEX_DIR,       "Index FAISS",         "dossier"),
+    (ROOT / config.FINGERPRINTS_DB, "Fingerprints SQLite", "fichier"),
+    (ROOT / config.METADATA_PATH,   "Metadata parquet",    "fichier"),
 ]
 
 
-def get_size(path: Path) -> str:
+def _get_size(path: Path) -> str:
     """Retourne la taille lisible d'un fichier ou dossier."""
     if not path.exists():
         return "—"
@@ -48,17 +43,18 @@ def get_size(path: Path) -> str:
     return f"{size:.1f} To"
 
 
-@click.command()
-@click.option("--yes", "-y", is_flag=True, default=False, help="Supprimer sans confirmation")
-def main(yes: bool) -> None:
-    """Supprime tous les embeddings, fingerprints et métadonnées."""
+def run_clean(yes: bool = False) -> None:
+    """
+    Supprime tous les embeddings, fingerprints et métadonnées.
 
+    Args:
+        yes: si True, supprime sans demander de confirmation.
+    """
     console.print("\n[bold red]Nettoyage de la base de données[/bold red]\n")
 
-    # Afficher ce qui va être supprimé
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Contenu",  width=25)
-    table.add_column("Chemin",   width=35)
+    table.add_column("Chemin",   width=40)
     table.add_column("Type",     width=8)
     table.add_column("Taille",   justify="right", width=10)
     table.add_column("Statut",   width=12)
@@ -70,9 +66,9 @@ def main(yes: bool) -> None:
             any_exists = True
         table.add_row(
             label,
-            str(path),
+            str(path.relative_to(ROOT)),
             kind,
-            get_size(path),
+            _get_size(path),
             "[green]présent[/green]" if exists else "[dim]absent[/dim]",
         )
 
@@ -82,7 +78,6 @@ def main(yes: bool) -> None:
         console.print("\n[green]Base déjà vide. Rien à supprimer.[/green]\n")
         return
 
-    # Confirmation
     if not yes:
         console.print("\n[bold yellow]Cette action est irréversible.[/bold yellow]")
         confirm = input("Confirmer la suppression ? [o/N] : ").strip().lower()
@@ -90,7 +85,6 @@ def main(yes: bool) -> None:
             console.print("[dim]Annulé.[/dim]\n")
             return
 
-    # Suppression
     console.print()
     for path, label, kind in TARGETS:
         if not path.exists():
@@ -102,11 +96,7 @@ def main(yes: bool) -> None:
             else:
                 path.unlink()
             console.print(f"  [green]✓ {label} supprimé[/green]")
-        except Exception as e:
-            console.print(f"  [red]✗ {label} — erreur : {e}[/red]")
+        except Exception as exc:
+            console.print(f"  [red]✗ {label} — erreur : {exc}[/red]")
 
     console.print("\n[bold green]Base de données nettoyée.[/bold green]\n")
-
-
-if __name__ == "__main__":
-    main()
