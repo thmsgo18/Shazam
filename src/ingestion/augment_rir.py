@@ -104,21 +104,94 @@ def _make_rir(rt60: float, sr: int, seed: int) -> np.ndarray:
     return (rir / norm) if norm > 0 else rir
 
 
-def _load_rirs(rir_dir: Path, n: int, sr: int) -> list[tuple[str, np.ndarray]]:
-    """Charge N RIRs depuis rir_dir (WAV) ou génère des RIRs synthétiques."""
-    wavs = sorted(rir_dir.glob("*.wav")) + sorted(rir_dir.glob("*.WAV"))
-    if wavs:
-        console.print(f"[green]{len(wavs)} fichier(s) RIR trouvé(s) dans {rir_dir}[/green]")
-        rirs = []
-        for wav in wavs[:n]:
-            try:
-                y, _ = librosa.load(str(wav), sr=sr, mono=True)
-                rirs.append((wav.stem, y))
-            except Exception as exc:
-                console.print(f"[yellow]⚠ Impossible de charger {wav.name} : {exc}[/yellow]")
-        return rirs
+def _estimate_rt60(rir: np.ndarray, sr: int) -> float:
+    """
+    Estime le RT60 d'une RIR par décroissance d'énergie (méthode Schroeder).
+    Retourne le temps (en secondes) pour une chute de 60 dB depuis le pic.
+    """
+    energy = rir ** 2
+    peak_idx = int(np.argmax(energy))
+    tail = energy[peak_idx:]
+    # Intégrale inverse de Schroeder
+    schroeder = np.cumsum(tail[::-1])[::-1]
+    schroeder = np.maximum(schroeder, 1e-12)
+    db = 10.0 * np.log10(schroeder / schroeder[0])
+    # Premier indice où ça passe sous -60 dB
+    indices = np.where(db <= -60.0)[0]
+    if len(indices) == 0:
+        # La RIR est trop courte pour mesurer -60 dB → extrapoler
+        indices_20 = np.where(db <= -20.0)[0]
+        if len(indices_20) == 0:
+            return len(tail) / sr
+        return (indices_20[0] / sr) * 3.0  # RT20 × 3 ≈ RT60
+    return indices[0] / sr
 
-    console.print(f"[cyan]Aucun WAV dans {rir_dir} — RIRs synthétiques générées[/cyan]")
+
+def _select_diverse_mit_rirs(
+    candidates: list[tuple[str, np.ndarray, float]],
+    n: int,
+) -> list[tuple[str, np.ndarray]]:
+    """
+    Sélectionne N RIRs parmi les candidats pour maximiser la diversité acoustique.
+
+    Stratégie : trier par RT60 puis échantillonner uniformément — on couvre
+    ainsi toute la plage allant des espaces secs (RT60 court) aux grandes salles
+    (RT60 long), avec le maximum de diversité possible pour N échantillons.
+
+    Args:
+        candidates: liste de (nom, waveform, rt60) déjà chargés.
+        n:          nombre de RIRs à retourner.
+
+    Returns:
+        Liste de (nom, waveform) triés du plus sec au plus réverbérant.
+    """
+    sorted_c = sorted(candidates, key=lambda x: x[2])  # tri par RT60 croissant
+    if n >= len(sorted_c):
+        return [(name, rir) for name, rir, _ in sorted_c]
+    # Échantillonnage uniforme sur la liste triée
+    indices = np.linspace(0, len(sorted_c) - 1, n, dtype=int)
+    selected = [sorted_c[i] for i in indices]
+    console.print(
+        f"[green]{len(candidates)} RIRs MIT disponibles → "
+        f"{n} sélectionnées par diversité RT60 "
+        f"({selected[0][2]:.2f}s … {selected[-1][2]:.2f}s)[/green]"
+    )
+    return [(name, rir) for name, rir, _ in selected]
+
+
+def _load_rirs(rir_dir: Path, n: int, sr: int, source: str = "synthetic") -> list[tuple[str, np.ndarray]]:
+    """
+    Charge N RIRs selon la source configurée.
+
+    Args:
+        rir_dir: dossier contenant les WAV MIT (ignoré si source="synthetic").
+        n:       nombre de RIRs à retourner.
+        sr:      sample rate cible.
+        source:  "synthetic" → RIRs mathématiques | "mit" → WAV du dossier rir_dir.
+    """
+    if source == "mit":
+        wavs = sorted(rir_dir.glob("*.wav")) + sorted(rir_dir.glob("*.WAV"))
+        if not wavs:
+            console.print(
+                f"[yellow]⚠ Aucun WAV dans {rir_dir} (source='mit') "
+                f"— bascule sur RIRs synthétiques.[/yellow]"
+            )
+        else:
+            console.print(f"[cyan]{len(wavs)} fichier(s) WAV MIT trouvé(s) dans {rir_dir}[/cyan]")
+            candidates: list[tuple[str, np.ndarray, float]] = []
+            for wav in wavs:
+                try:
+                    y, _ = librosa.load(str(wav), sr=sr, mono=True)
+                    rt60  = _estimate_rt60(y, sr)
+                    candidates.append((wav.stem, y, rt60))
+                except Exception as exc:
+                    console.print(f"[yellow]⚠ Impossible de charger {wav.name} : {exc}[/yellow]")
+            if candidates:
+                return _select_diverse_mit_rirs(candidates, n)
+            console.print("[yellow]⚠ Aucune RIR MIT valide — bascule sur synthétiques.[/yellow]")
+
+    # source="synthetic" ou fallback
+    console.print(f"[cyan]RIRs synthétiques générées ({n} environnements)[/cyan]")
     return [
         (f"synth_{name}_rt{int(rt60 * 100)}ms", _make_rir(rt60, sr, seed))
         for name, rt60, seed in SYNTHETIC_RIR_PARAMS[:n]
@@ -314,8 +387,9 @@ def _rebuild_index(collection_key: str, chroma_client) -> None:
 def run_augment(
     method: str | None = None,
     tracks: str = "flowers",
-    n_rir: int = 5,
-    rir_dir: str = "data/rir",
+    n_rir: int | None = None,
+    rir_dir: str | None = None,
+    source: str | None = None,
     workers: int | None = None,
     device: str | None = None,
     rebuild_index: bool = True,
@@ -326,8 +400,9 @@ def run_augment(
     Args:
         method:        méthode d'embedding (None = config.EMBEDDING_METHOD).
         tracks:        'flowers', 'all' ou un track_id précis.
-        n_rir:         nombre de RIRs à appliquer par track.
-        rir_dir:       dossier contenant les fichiers RIR .wav.
+        n_rir:         nombre de RIRs à appliquer par track (None = config.RIR_N).
+        rir_dir:       dossier WAV MIT (None = config.RIR_MIT_DIR).
+        source:        "synthetic" | "mit" (None = config.RIR_SOURCE).
         workers:       nombre de threads de téléchargement (None = config.DOWNLOAD_WORKERS).
         device:        device PyTorch : 'cpu' / 'cuda' / 'mps' (None = auto).
         rebuild_index: si True, reconstruit l'index FAISS après l'augmentation.
@@ -339,6 +414,12 @@ def run_augment(
         method = config.EMBEDDING_METHOD
     if workers is None:
         workers = config.DOWNLOAD_WORKERS
+    if n_rir is None:
+        n_rir = config.RIR_N
+    if source is None:
+        source = config.RIR_SOURCE
+    if rir_dir is None:
+        rir_dir = config.RIR_MIT_DIR
 
     load_sr    = _get_load_sr(method)
     batch_size = _get_batch_size(method)
@@ -348,9 +429,10 @@ def run_augment(
     console.print(Panel(
         f"[bold]Méthode     :[/bold] [cyan]{method}[/cyan]\n"
         f"[bold]Tracks      :[/bold] [cyan]{tracks}[/cyan]\n"
+        f"[bold]Source RIR  :[/bold] [cyan]{source}[/cyan]\n"
         f"[bold]N RIRs      :[/bold] [cyan]{n_rir}[/cyan]\n"
         f"[bold]Workers DL  :[/bold] [cyan]{workers}[/cyan]\n"
-        f"[bold]RIR dir     :[/bold] [cyan]{rir_dir}[/cyan]",
+        + (f"[bold]RIR dir     :[/bold] [cyan]{rir_dir}[/cyan]" if source == "mit" else ""),
         title="[bold cyan]Augmentation RIR[/bold cyan]",
         expand=False,
     ))
@@ -388,7 +470,7 @@ def run_augment(
     signal.signal(signal.SIGTERM, _on_interrupt)
 
     console.print("[yellow]Chargement des RIRs...[/yellow]")
-    rirs = _load_rirs(rir_path, n_rir, sr=22050)
+    rirs = _load_rirs(rir_path, n_rir, sr=22050, source=source)
     if not rirs:
         console.print("[red]Aucune RIR disponible. Abandon.[/red]")
         return
@@ -405,8 +487,10 @@ def run_augment(
 
     if tracks == "flowers":
         df_all = df_meta[df_meta["track_id"] == FLOWERS_ID]
-    elif tracks == "all":
+    elif tracks == "all" or tracks is None:
         df_all = df_meta
+    elif isinstance(tracks, list):
+        df_all = df_meta[df_meta["track_id"].isin(tracks)]
     else:
         df_all = df_meta[df_meta["track_id"] == tracks]
 

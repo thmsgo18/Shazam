@@ -71,15 +71,15 @@ def identify_track(
     """
     if method is None:
         method = config.EMBEDDING_METHOD # Si pas de méthode donnée on utilise celle du config.
-    
+
     # On prend la valeur du Sample Rate idéale en fonction de la méthode utilisé :
     if method == "clap":
         targ_sr = config.CLAP_SAMPLE_RATE
     elif method == "muq":
         targ_sr = config.MUQ_SAMPLE_RATE
-    else :
+    else:
         targ_sr = config.SAMPLE_RATE
-    
+
     # ---------- Stage 1 (Embeddings + FAISS) : ----------
 
     index, segments = load_searcher(method) # Charge l'index FAISS et le .parquet pour la correspondance.
@@ -109,19 +109,20 @@ def identify_track(
                 sr=sr,
                 method=method,
                 clap_model_name=config.CLAP_MODEL_NAME,
-                muq_model_name=config.MUQ_MODEL_NAME
+                muq_model_name=config.MUQ_MODEL_NAME,
+                mert_model_name=config.MERT_MODEL_NAME,
             )
             distances, indices = search_segments(index=index, query_embedding=embedding, k=config.VECTOR_TOP_K_SEGMENTS)
             all_results.append((distances, indices))
-    
+
     global_scores = {} # Dictionnaire global : track_id → score cumulé sur tous les segments.
 
     for distances, indices in all_results:                          # Pour chaque segment de l'audio que l'on cherche.
         partial = aggregate_by_track(indices, distances, segments)  # Traduction les indices FAISS en track_id et agréger
         for track_id, score in partial:                             # Pour chaque morceau trouvé par ce segment
-            global_scores[track_id]= global_scores.get(track_id, 0.0) + score # Ajouter son score au total global
-    
-    candidates = sorted(global_scores.items(), key= lambda x: x[1], reverse= True) [:config.VECTOR_TOP_N_TRACKS] # Garder les k meilleurs candidats triés par score décroissant.
+            global_scores[track_id] = global_scores.get(track_id, 0.0) + score # Ajouter son score au total global
+
+    candidates = sorted(global_scores.items(), key=lambda x: x[1], reverse=True)[:config.VECTOR_TOP_N_TRACKS]
 
 
     # ---------- Stage 2 (Fingerprinting) : ----------
@@ -157,11 +158,10 @@ def identify_track(
         return (track_id, score_faiss, score_fp)
 
     if config.OPT_FINGERPRINT_PARALLEL:
-        # Chargement et fingerprinting des candidats en parallèle
+        # Calcul des similarités fingerprint en parallèle (CPU-bound)
         with ThreadPoolExecutor(max_workers=4) as executor:
             scored = list(executor.map(process_candidate, candidates))
     else:
-        # Traitement séquentiel (comportement de base)
         scored = [process_candidate(c) for c in candidates]
 
     # ── Classement final en cascade ──────────────────────────────────────────
@@ -172,6 +172,5 @@ def identify_track(
     top = scored[:top_n]
 
     if detailed:
-        # score_final = score_fp pour la cohérence avec le reste du code (évaluation, etc.)
         return [(tid, score_fp, score_faiss, score_fp) for tid, score_faiss, score_fp in top]
     return [(tid, score_fp) for tid, score_faiss, score_fp in top]

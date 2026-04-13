@@ -71,6 +71,13 @@ MERT_BATCH_SIZE  = 8
 # Augmenter si connexion rapide, réduire si bans YouTube fréquents
 DOWNLOAD_WORKERS = 5
 
+# Augmentation RIR
+# RIR_SOURCE : "synthetic" → RIRs mathématiques générées à la volée
+#              "mit"       → vraies RIRs WAV dans RIR_MIT_DIR, sélection par diversité RT60
+RIR_SOURCE  = "synthetic"   # "synthetic" | "mit"
+RIR_N       = 5             # nombre de RIRs par track
+RIR_MIT_DIR = "data/rir"    # dossier contenant les fichiers WAV du MIT (si RIR_SOURCE = "mit")
+
 # Optimisations
 # Mettre à False pour revenir au comportement de base sans optimisations
 OPT_FLOAT16              = True   # Charger CLAP/MuQ en demi-précision (float16) → moins de RAM, plus rapide

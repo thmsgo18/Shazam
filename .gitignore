@@ -81,3 +81,5 @@ Thumbs.db
 *.temp
 tmp/
 temp/
+data.nosync/
+data

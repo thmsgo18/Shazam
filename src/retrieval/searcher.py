@@ -116,4 +116,3 @@ def aggregate_by_track(
         scores[track_id]= scores.get(track_id, 0.0) + float(dist)   # Calcule de l'accumulation du score. score élévé chanson très proche.
 
     return sorted(scores.items(), key=lambda x: x[1], reverse=True) # Retourne une liste de tuple trié par ordre décroissant.
-

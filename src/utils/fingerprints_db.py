@@ -10,13 +10,37 @@ Schéma :
 
 from __future__ import annotations
 
+import contextlib
 import pickle
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 # Verrou global pour les écritures concurrentes (ThreadPoolExecutor)
 _db_lock = threading.Lock()
+
+# Timeout SQLite (secondes) — délai d'attente si la DB est verrouillée par une autre connexion
+_SQLITE_TIMEOUT = 30
+
+
+@contextlib.contextmanager
+def _connect(db_path: Path, timeout: float = _SQLITE_TIMEOUT):
+    """
+    Context manager qui ouvre une connexion SQLite, commit ou rollback,
+    et ferme explicitement la connexion à la sortie.
+
+    Garantit qu'aucun verrou n'est laissé actif après le bloc.
+    """
+    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -24,10 +48,13 @@ _db_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 def fp_init(db_path: Path) -> None:
-    """Crée la table fingerprints si elle n'existe pas encore."""
+    """Crée la table fingerprints si elle n'existe pas encore, active le mode WAL."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
+        # WAL = Write-Ahead Logging : meilleure gestion de la concurrence,
+        # les lecteurs ne bloquent pas les écrivains et vice-versa.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS fingerprints (
                 track_id TEXT PRIMARY KEY,
@@ -46,7 +73,7 @@ def fp_load_ids(db_path: Path) -> set[str]:
     db_path = Path(db_path)
     if not db_path.exists():
         return set()
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT track_id FROM fingerprints WHERE n_hashes > 0"
         ).fetchall()
@@ -58,7 +85,7 @@ def fp_load_all(db_path: Path) -> dict[str, set]:
     db_path = Path(db_path)
     if not db_path.exists():
         return {}
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         rows = conn.execute("SELECT track_id, hashes FROM fingerprints").fetchall()
     return {r[0]: pickle.loads(r[1]) for r in rows}
 
@@ -68,7 +95,7 @@ def fp_load_stats(db_path: Path) -> dict[str, int]:
     db_path = Path(db_path)
     if not db_path.exists():
         return {}
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT track_id, n_hashes FROM fingerprints"
         ).fetchall()
@@ -87,7 +114,7 @@ def fp_detect_format(db_path: Path) -> str:
     db_path = Path(db_path)
     if not db_path.exists():
         return "unknown"
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT hashes FROM fingerprints WHERE n_hashes > 0 LIMIT 1"
         ).fetchone()
@@ -117,12 +144,21 @@ def fp_save(db_path: Path, track_id: str, hashes: set, thread_safe: bool = False
     """
     db_path = Path(db_path)
 
-    def _write():
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?)",
-                (track_id, pickle.dumps(hashes), len(hashes)),
-            )
+    def _write(retries: int = 5, delay: float = 1.0):
+        """Écrit dans la DB avec retry automatique si database is locked."""
+        for attempt in range(retries):
+            try:
+                with _connect(db_path) as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?)",
+                        (track_id, pickle.dumps(hashes), len(hashes)),
+                    )
+                return  # succès
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1))  # backoff progressif
+                else:
+                    raise
 
     if thread_safe:
         with _db_lock:
@@ -140,7 +176,7 @@ def fp_delete(db_path: Path, track_ids: set[str]) -> int:
     db_path = Path(db_path)
     if not db_path.exists() or not track_ids:
         return 0
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         placeholders = ",".join("?" * len(track_ids))
         cur = conn.execute(
             f"DELETE FROM fingerprints WHERE track_id IN ({placeholders})",
@@ -168,7 +204,7 @@ def fp_migrate_from_pkl(pkl_path: Path, db_path: Path) -> int:
     except Exception:
         return 0
     fp_init(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.executemany(
             "INSERT OR IGNORE INTO fingerprints VALUES (?, ?, ?)",
             [(tid, pickle.dumps(fp), len(fp)) for tid, fp in old.items()],

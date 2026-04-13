@@ -73,10 +73,13 @@ def ingest(csv_paths: tuple[str, ...]) -> None:
               default=None, help="Méthode d'embedding (défaut : config.py)")
 @click.option("--tracks", multiple=True,
               help="track_id(s) à traiter (défaut : tous les tracks présents)")
-@click.option("--n-rir", default=5, show_default=True,
-              help="Nombre de RIR par track")
+@click.option("--rir-source", default=None,
+              type=click.Choice(["synthetic", "mit"]),
+              help="Source des RIRs : 'synthetic' (générées) ou 'mit' (WAV réels). Défaut : config.RIR_SOURCE")
+@click.option("--n-rir", default=None, type=int,
+              help="Nombre de RIRs par track (défaut : config.RIR_N)")
 @click.option("--rir-dir", default=None,
-              help="Dossier de RIR réelles (défaut : RIR synthétiques)")
+              help="Dossier WAV MIT (défaut : config.RIR_MIT_DIR, uniquement si --rir-source=mit)")
 @click.option("--workers", default=3, show_default=True,
               help="Workers parallèles pour le téléchargement")
 @click.option("--device", default=None,
@@ -86,7 +89,8 @@ def ingest(csv_paths: tuple[str, ...]) -> None:
 def augment(
     method: str | None,
     tracks: tuple[str, ...],
-    n_rir: int,
+    rir_source: str | None,
+    n_rir: int | None,
     rir_dir: str | None,
     workers: int,
     device: str | None,
@@ -98,9 +102,10 @@ def augment(
     from src.ingestion.augment_rir import run_augment
     run_augment(
         method=method,
-        tracks=list(tracks) if tracks else None,
+        tracks=list(tracks) if tracks else "all",
         n_rir=n_rir,
         rir_dir=rir_dir,
+        source=rir_source,
         workers=workers,
         device=device,
         rebuild_index=not no_rebuild_index,
@@ -255,55 +260,9 @@ def identify(audio: str, method: str | None, top: int, detailed: bool) -> None:
     """
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK",      "1")
     os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+    from src.api.app import run_identify_cli
 
-    import pandas as pd
-    from rich.console import Console
-    from rich.table import Table
-    from src.retrieval.query_pipeline import identify_track
-
-    console = Console()
-    console.print(f"\n[bold cyan]Identification de :[/bold cyan] {audio}")
-    if method:
-        console.print(f"[dim]Méthode : {method}[/dim]\n")
-
-    results = identify_track(audio, method=method, top_n=top, detailed=detailed)
-
-    if not results:
-        console.print("[red]Aucun résultat trouvé.[/red]")
-        return
-
-    meta_path = ROOT / "data" / "processed" / "metadata.parquet"
-    metadata: dict = {}
-    if meta_path.exists():
-        df = pd.read_parquet(meta_path, columns=["track_id", "title", "artist"])
-        metadata = {r.track_id: {"title": r.title, "artist": r.artist}
-                    for r in df.itertuples()}
-
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("#",            style="dim", width=3)
-    table.add_column("Artiste",                   width=24)
-    table.add_column("Titre",                     width=34)
-    table.add_column("Score FP",    justify="right")
-    if detailed:
-        table.add_column("Score FAISS", justify="right")
-
-    for rank, row in enumerate(results, start=1):
-        track_id = row[0]
-        score_fp = row[1]
-        info     = metadata.get(track_id, {})
-        artist   = info.get("artist", track_id)[:24]
-        title    = info.get("title",  "—")[:34]
-        style    = "bold green" if rank == 1 else ""
-        if detailed:
-            score_faiss = row[2]
-            table.add_row(str(rank), artist, title,
-                          f"{score_fp:.4f}", f"{score_faiss:.4f}",
-                          style=style)
-        else:
-            table.add_row(str(rank), artist, title, f"{score_fp:.4f}",
-                          style=style)
-
-    console.print(table)
+    run_identify_cli(audio, method=method, top=top, detailed=detailed)
 
 
 @cli.command("find-track")
