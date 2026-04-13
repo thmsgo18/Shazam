@@ -46,7 +46,7 @@ FP_MAX_DELTA_T        = 50    # Distance temporelle maximale entre deux pics (en
 
 # Vector search
 VECTOR_TOP_K_SEGMENTS = 200   # Nb de segments candidats récupérés depuis FAISS par segment requête
-VECTOR_TOP_N_TRACKS   = 20    # Nb de tracks uniques qui passent en Stage 2 (fingerprinting)
+VECTOR_TOP_N_TRACKS   = 50    # Nb de tracks uniques qui passent en Stage 2 (fingerprinting)
 VECTOR_TOP_N_RESULTS  = 10    # Nb de résultats finaux retournés à l'interface
 
 INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
