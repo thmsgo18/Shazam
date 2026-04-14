@@ -1,5 +1,7 @@
 # Shazam
 
+> **Language / Langue :** English | [Français](./README.fr.md)
+
 ![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
 ![FAISS](https://img.shields.io/badge/FAISS-vector_search-0064A5)
@@ -10,397 +12,382 @@
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 ![CLAP](https://img.shields.io/badge/CLAP-laion-green)
 ![MuQ](https://img.shields.io/badge/MuQ-OpenMuQ-blueviolet)
-![Licence](https://img.shields.io/badge/Licence-Master_IAD_S2-lightgrey)
+![License](https://img.shields.io/badge/License-Master_IAD_S2-lightgrey)
 
-Système de reconnaissance musicale inspiré de Shazam, développé dans le cadre d'un projet Big Data (Master IAD, S2). À partir d'un extrait audio capturé au micro ou déposé en fichier, le système retrouve le morceau correspondant dans une base de plusieurs centaines de titres et affiche les liens de streaming.
+A music recognition system inspired by Shazam, developed as part of a Big Data project (Master IAD, S2). Given an audio clip captured from a microphone or uploaded as a file, the system identifies the matching track from a database of several hundred titles and displays streaming links.
 
-L'approche combine la puissance des embeddings de deep learning (recherche vectorielle FAISS) avec le fingerprinting spectral inspiré du brevet Shazam original, formant un pipeline hybride en deux étapes qui reste robuste face au bruit, à la réverbération et aux extraits courts.
-
----
-
-## Table des matières
-
-- [Shazam](#shazam)
-  - [Table des matières](#table-des-matières)
-  - [Comment ça marche](#comment-ça-marche)
-    - [Fonctionnement du fingerprinting](#fonctionnement-du-fingerprinting)
-  - [Architecture du projet](#architecture-du-projet)
-  - [Méthodes d'embedding](#méthodes-dembedding)
-  - [Prérequis](#prérequis)
-  - [Installation](#installation)
-  - [Données](#données)
-  - [Démarrage rapide](#démarrage-rapide)
-  - [Commandes essentielles](#commandes-essentielles)
-  - [Configuration](#configuration)
-  - [Interface web](#interface-web)
-    - [Routes API (FastAPI)](#routes-api-fastapi)
-    - [Fonctionnalités](#fonctionnalités)
-    - [Modes de lancement](#modes-de-lancement)
-  - [Augmentation RIR](#augmentation-rir)
-    - [Génération des RIRs synthétiques](#génération-des-rirs-synthétiques)
-    - [Sources disponibles](#sources-disponibles)
-  - [Évaluation](#évaluation)
-    - [Métriques calculées](#métriques-calculées)
-    - [Conditions de dégradation](#conditions-de-dégradation)
-    - [Workflow d'évaluation](#workflow-dévaluation)
-    - [Graphiques produits](#graphiques-produits)
-  - [Stockage des données](#stockage-des-données)
-    - [ChromaDB — `data/chroma/`](#chromadb--datachroma)
-    - [SQLite — `data/features/fingerprints.db`](#sqlite--datafeaturesfingerprintsdb)
-    - [FAISS — `data/index/`](#faiss--dataindex)
-    - [Parquet — `data/processed/metadata.parquet`](#parquet--dataprocessedmetadataparquet)
-  - [Points d'attention](#points-dattention)
-  - [Technologies](#technologies)
-  - [Améliorations possibles](#améliorations-possibles)
-  - [Références](#références)
-  - [Équipe](#équipe)
+The approach combines the power of deep learning embeddings (FAISS vector search) with spectral fingerprinting inspired by the original Shazam patent, forming a hybrid two-stage pipeline that remains robust against noise, reverberation, and short audio clips.
 
 ---
 
-## Comment ça marche
+## Table of Contents
 
-Le pipeline d'identification se déroule en deux étapes successives.
+- [How It Works](#how-it-works)
+  - [Fingerprinting in Detail](#fingerprinting-in-detail)
+- [Project Architecture](#project-architecture)
+- [Embedding Methods](#embedding-methods)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Data](#data)
+- [Quick Start](#quick-start)
+- [Essential Commands](#essential-commands)
+- [Configuration](#configuration)
+- [Web Interface](#web-interface)
+- [RIR Augmentation](#rir-augmentation)
+- [Evaluation](#evaluation)
+- [Data Storage](#data-storage)
+- [Important Notes](#important-notes)
+- [Technologies](#technologies)
+- [Future Improvements](#future-improvements)
+- [References](#references)
+- [Team](#team)
+
+---
+
+## How It Works
+
+The identification pipeline runs in two successive stages.
 
 ```
-Audio requête
+Query audio
       │
       ▼
 ┌─────────────────────────────────────────┐
-│  Stage 1 — Recherche vectorielle        │
+│  Stage 1 — Vector Search                │
 │                                         │
-│  Découpage en fenêtres de 5s            │
+│  Split into 5s windows                  │
 │  → Embedding (MFCC / CLAP / MuQ / MERT) │
-│  → Recherche FAISS (cosinus)            │
-│  → Top 20 tracks candidats              │
+│  → FAISS search (cosine)                │
+│  → Top candidate tracks                 │
 └────────────────┬────────────────────────┘
                  │
                  ▼
 ┌─────────────────────────────────────────┐
-│  Stage 2 — Fingerprinting Shazam        │
+│  Stage 2 — Shazam Fingerprinting        │
 │                                         │
-│  Constellation spectrale de la requête  │
-│  ↔ Fingerprints SQLite des 20 candidats │
-│  → Alignement temporel (histogramme)    │
-│  → Score de cohérence temporelle        │
+│  Spectral constellation of the query    │
+│  ↔ SQLite fingerprints of candidates    │
+│  → Temporal alignment (histogram)       │
+│  → Temporal coherence score             │
 └────────────────┬────────────────────────┘
                  │
                  ▼
-      Classement final
-      (FP en priorité, FAISS en départage)
+      Final ranking
+      (FP score first, FAISS as tiebreaker)
 ```
 
-**Stage 1** transforme chaque fenêtre de 5 secondes en vecteur d'embedding via un modèle pré-entraîné, puis interroge l'index FAISS pour trouver les segments les plus proches dans l'espace vectoriel. Les résultats sont agrégés par track pour obtenir les `VECTOR_TOP_N_TRACKS` (défaut : 20) meilleurs candidats.
+**Stage 1** transforms each 5-second window into an embedding vector via a pre-trained model, then queries the FAISS index to find the nearest segments in vector space. Results are aggregated by track to produce the `VECTOR_TOP_N_TRACKS` (default: 50) best candidates.
 
-**Stage 2** applique le fingerprinting de Shazam : extraction d'une constellation de pics dans le spectrogramme, comparaison avec les fingerprints stockés en SQLite, et alignement temporel par histogramme d'offsets. Ce score est plus discriminant que la similarité cosinus et résiste mieux aux dégradations audio.
+**Stage 2** applies Shazam fingerprinting: extraction of a constellation of spectral peaks, comparison with fingerprints stored in SQLite, and temporal alignment via an offset histogram. This score is more discriminative than cosine similarity and more robust to audio degradation.
 
-Le **score final** trie d'abord par score fingerprint (source de vérité), puis par score FAISS en cas d'égalité. Si le fingerprinting échoue sur toute la liste (audio très dégradé), le classement retombe sur les scores FAISS seuls.
+The **final score** sorts first by fingerprint score (ground truth), then by FAISS score as a tiebreaker. If fingerprinting fails for all candidates (heavily degraded audio), the ranking falls back to FAISS scores alone.
 
-### Fonctionnement du fingerprinting
+### Fingerprinting in Detail
 
-Le fingerprinting est une implémentation du brevet Shazam original (Wang, 2003). Il opère en quatre étapes :
+The fingerprinting is an implementation of the original Shazam patent (Wang, 2003). It operates in three steps:
 
 ```
-Signal audio (22 050 Hz)
+Audio signal (22 050 Hz)
         │
         ▼
 ┌───────────────────────────────┐
-│  Spectrogramme (STFT)         │
+│  Spectrogram (STFT)           │
 │                               │
-│  Fréquence                    │
+│  Frequency                    │
 │    ^   *       *              │
-│    │      *  *    *    *      │  ← pics spectraux
+│    │      *  *    *    *      │  ← spectral peaks
 │    │   *           *          │    (constellation map)
-│    └──────────────────> Temps │
+│    └──────────────────> Time  │
 └──────────────┬────────────────┘
-               │  détection de pics locaux
+               │  local peak detection
                ▼
 ┌───────────────────────────────┐
-│  Génération des hashes        │
+│  Hash generation              │
 │                               │
-│  Ancre (f1, t1)               │
-│      └─── cible (f2, t2)      │
+│  Anchor (f1, t1)              │
+│      └─── target (f2, t2)     │
 │                               │
-│  hash = (f1, f2, Δt, t1)      │  ← 4-tuple par paire
+│  hash = (f1, f2, Δt, t1)      │  ← 4-tuple per pair
 └──────────────┬────────────────┘
                │
                ▼
 ┌───────────────────────────────┐
-│  Alignement temporel          │
+│  Temporal alignment           │
 │                               │
-│  Pour chaque hash commun      │
-│  entre requête et candidat :  │
+│  For each shared hash         │
+│  between query and candidate: │
 │  offset = t1_base − t1_query  │
 │                               │
-│  Histogramme des offsets →    │
-│  pic = cohérence temporelle   │
+│  Offset histogram →           │
+│  peak = temporal coherence    │
 └───────────────────────────────┘
 ```
 
-Chaque hash encode une paire de pics `(fréquence_ancre, fréquence_cible, delta_temps)` avec la position temporelle de l'ancre `t1`. Un morceau de 3 minutes génère typiquement plusieurs milliers de hashes, stockés en SQLite sous forme de BLOB pickled.
+Each hash encodes a peak pair `(anchor_freq, target_freq, delta_time)` along with the anchor's temporal position `t1`. A 3-minute track typically generates several thousand hashes, stored in SQLite as pickled BLOBs.
 
-L'alignement temporel est la clé de la robustesse : deux morceaux différents peuvent partager quelques hashes par hasard, mais seul le bon morceau présentera un pic franc dans l'histogramme des offsets — toutes ses correspondances s'alignent au même décalage temporel.
+Temporal alignment is the key to robustness: two different tracks may share a few hashes by chance, but only the correct track will show a clear peak in the offset histogram — all its matching hashes align at the same temporal offset.
 
 ---
 
-## Architecture du projet
+## Project Architecture
 
 ```
-Projet/
-├── manage.py                        # Point d'entrée unique — toutes les commandes
+Project/
+├── manage.py                        # Single entry point — all commands
 ├── src/
-│   ├── config.py                    # Paramètres centralisés (LIRE EN PREMIER)
+│   ├── config.py                    # Centralized parameters (READ FIRST)
 │   ├── ingestion/
-│   │   ├── ingest.py                # Pipeline téléchargement → embeddings → index
-│   │   ├── augment_rir.py           # Augmentation par Room Impulse Response
-│   │   └── fingerprints.py          # Recalcul des fingerprints
+│   │   ├── ingest.py                # Download → embeddings → index pipeline
+│   │   ├── augment_rir.py           # Room Impulse Response augmentation
+│   │   └── fingerprints.py          # Fingerprint rebuilding
 │   ├── features/
-│   │   └── embeddings_audio.py      # Extraction MFCC / CLAP / MuQ / MERT
+│   │   └── embeddings_audio.py      # MFCC / CLAP / MuQ / MERT extraction
 │   ├── index/
-│   │   └── build_index.py           # Construction des index FAISS
+│   │   └── build_index.py           # FAISS index construction
 │   ├── retrieval/
-│   │   ├── query_pipeline.py        # Orchestration Stage 1 + Stage 2
-│   │   └── searcher.py              # Recherche FAISS + agrégation
+│   │   ├── query_pipeline.py        # Stage 1 + Stage 2 orchestration
+│   │   └── searcher.py              # FAISS search + aggregation
 │   ├── evaluation/
-│   │   ├── evaluate.py              # Métriques Top-1 / Top-5 / MRR / latence
-│   │   ├── rir_impact.py            # Analyse impact RIR sur un fichier
-│   │   └── plots.py                 # Génération des graphiques PNG
+│   │   ├── evaluate.py              # Top-1 / Top-5 / MRR / latency metrics
+│   │   ├── rir_impact.py            # RIR impact analysis on a single file
+│   │   └── plots.py                 # PNG chart generation
 │   └── maintenance/
-│       ├── check.py                 # Vérification intégrité des données
-│       ├── enrich.py                # Enrichissement métadonnées (Deezer / MusicBrainz)
-│       └── clean.py                 # Suppression propre d'un track
+│       ├── check.py                 # Data integrity verification
+│       ├── enrich.py                # Metadata enrichment (Deezer / MusicBrainz)
+│       └── clean.py                 # Clean track deletion
 ├── webapp/
-│   ├── backend/server.py            # API FastAPI (3 routes)
+│   ├── backend/server.py            # FastAPI (3 routes)
 │   └── frontend/                    # React 18 + Vite (SPA)
 │       └── src/
-│           ├── App.jsx              # État global, routing entre vues
+│           ├── App.jsx              # Global state, view routing
 │           └── components/          # ListenButton, DropZone, ResultView…
-├── data/                            # Données persistantes (git-ignorées)
-│   ├── chroma/                      # Vecteurs d'embeddings (ChromaDB)
-│   ├── features/fingerprints.db     # Fingerprints Shazam (SQLite, mode WAL)
-│   ├── index/                       # Index FAISS + segments Parquet
-│   ├── processed/metadata.parquet   # Métadonnées enrichies des tracks
-│   ├── raw/                         # Fichiers audio de test
-│   └── rir/                         # WAV de Room Impulse Response (optionnel)
+├── data/                            # Persistent data (git-ignored)
+│   ├── chroma/                      # Embedding vectors (ChromaDB)
+│   ├── features/fingerprints.db     # Shazam fingerprints (SQLite, WAL mode)
+│   ├── index/                       # FAISS index + Parquet segments
+│   ├── processed/metadata.parquet   # Enriched track metadata
+│   ├── raw/                         # Test audio files
+│   └── rir/                         # Room Impulse Response WAV files (optional)
 ├── results/
-│   ├── EXPERIMENTS.md               # Journal des expériences (versionné)
-│   ├── eval/                        # JSON d'évaluation (git-ignorés)
-│   ├── benchmark/                   # JSON de benchmark (git-ignorés)
-│   └── plots/                       # Graphiques PNG pour le rapport (git-ignorés)
-└── research_paper/                  # Articles de référence (PDF)
+│   ├── EXPERIMENTS.md               # Experiment log (versioned)
+│   ├── eval/                        # Evaluation JSON files (git-ignored)
+│   ├── benchmark/                   # Benchmark JSON files (git-ignored)
+│   └── plots/                       # PNG charts for the report (git-ignored)
+└── research_paper/                  # Reference papers (PDF)
 ```
 
 ---
 
-## Méthodes d'embedding
+## Embedding Methods
 
-Quatre méthodes sont disponibles et peuvent coexister dans la même base. La méthode active est définie par `EMBEDDING_METHOD` dans `src/config.py`.
+Four methods are available and can coexist in the same database. The active method is defined by `EMBEDDING_METHOD` in `src/config.py`.
 
-| Méthode | Modèle | Dim. | Sample Rate | Compatibilité | Remarques |
-|---------|--------|------|-------------|---------------|-----------|
-| `mfcc` | — (librosa) | 40 | 22 050 Hz | CPU | Rapide, aucune dépendance modèle |
-| `clap` | `laion/clap-htsat-unfused` | 512 | 48 000 Hz | CUDA, MPS, CPU | Modèle généraliste, bon compromis qualité / vitesse |
-| `clap` | `laion/larger_clap_music` | 512 | 48 000 Hz | CUDA, MPS, CPU | Modèle spécialisé musique, meilleure précision |
-| `muq` | `OpenMuQ/MuQ-large-msd-iter` | 1 024 | 24 000 Hz | CUDA uniquement | Meilleure précision, GPU NVIDIA requis |
-| `mert` | `m-a-p/MERT-v1-95M` | 768 | 24 000 Hz | CUDA, MPS | Modèle de représentation musicale |
+| Method | Model | Dim. | Sample Rate | Compatibility | Notes |
+|--------|-------|------|-------------|---------------|-------|
+| `mfcc` | — (librosa) | 40 | 22 050 Hz | CPU | Fast, no model dependency |
+| `clap` | `laion/clap-htsat-unfused` | 512 | 48 000 Hz | CUDA, MPS, CPU | General-purpose, good quality/speed tradeoff |
+| `clap` | `laion/larger_clap_music` | 512 | 48 000 Hz | CUDA, MPS, CPU | Music-specialized, higher precision |
+| `muq` | `OpenMuQ/MuQ-large-msd-iter` | 1 024 | 24 000 Hz | CUDA only | Best precision, requires NVIDIA GPU |
+| `mert` | `m-a-p/MERT-v1-95M` | 768 | 24 000 Hz | CUDA, MPS | Music representation model |
 
-Chaque track mémorise les méthodes déjà calculées dans le champ `embedded_methods` de `metadata.parquet`. Relancer `ingest` après un changement de méthode ne recalcule que ce qui manque — les tracks existants ne sont pas re-téléchargés.
+Each track stores already-computed methods in the `embedded_methods` field of `metadata.parquet`. Re-running `ingest` after a method change only computes what is missing — existing tracks are not re-downloaded.
 
 ---
 
-## Prérequis
+## Requirements
 
-- **Python 3.10** (les dépendances ne sont pas toutes compatibles 3.11+)
-- **Node.js 18+** (pour le frontend React)
-- **ffmpeg** installé et accessible dans le PATH
-- **yt-dlp** (installé via `requirements.txt`)
-- GPU recommandé pour CLAP / MuQ / MERT (CPU fonctionne pour MFCC et CLAP)
+- **Python 3.10** (some dependencies are not compatible with 3.11+)
+- **Node.js 18+** (for the React frontend)
+- **ffmpeg** installed and available in PATH
+- **yt-dlp** (installed via `requirements.txt`)
+- GPU recommended for CLAP / MuQ / MERT (CPU works for MFCC and CLAP)
 
 ---
 
 ## Installation
 
 ```bash
-# 1. Cloner le dépôt
+# 1. Clone the repository
 git clone <url>
 cd Projet
 
-# 2. Créer et activer l'environnement virtuel
+# 2. Create and activate the virtual environment
 python3 -m venv venv
 source venv/bin/activate          # macOS / Linux
 # venv\Scripts\activate           # Windows
 
-# 3. Installer les dépendances Python
+# 3. Install Python dependencies
 pip install -r requirements.txt
 
-# 4. Installer les dépendances frontend
+# 4. Install frontend dependencies
 cd webapp/frontend && npm install && cd ../..
 ```
 
 ---
 
-## Données
+## Data
 
-Les données musicales proviennent des classements Spotify via Kaggle. Le pipeline télécharge automatiquement l'audio depuis YouTube en RAM (aucun MP3 stocké sur disque) à partir des titres et artistes présents dans le CSV.
+Music data comes from Spotify charts via Kaggle. The pipeline automatically downloads audio from YouTube into RAM (no MP3 stored on disk) using the artist and track names from the CSV.
 
-**Structure attendue du CSV :**
+**Expected CSV columns:**
 
-| Colonne | Description |
-|---------|-------------|
-| `track_name` | Titre du morceau |
-| `artist_names` | Nom de l'artiste |
+| Column | Description |
+|--------|-------------|
+| `track_name` | Track title |
+| `artist_names` | Artist name |
 
-Les CSV Kaggle `spotify-streaming-top-50-*.csv` sont directement compatibles. Placer les fichiers dans `data/kaggle/data/`.
+Kaggle `spotify-streaming-top-50-*.csv` files are directly compatible. Place them in `data/kaggle/data/`.
 
-**Dataset utilisé :** [Spotify Streaming Top 50 — Kaggle](https://www.kaggle.com/datasets/anxods/spotify-top-50-playlist-songs-anxods) — classements quotidiens Top 50 mondial et par pays.
+**Dataset used:** [Spotify Streaming Top 50 — Kaggle](https://www.kaggle.com/datasets/anxods/spotify-top-50-playlist-songs-anxods) — daily Top 50 charts worldwide and by country.
 
-**Déduplication automatique :** un même morceau présent dans plusieurs CSV (hits mondiaux présents dans le top France, top US et top Monde) n'est traité qu'une fois, identifié par son `track_id` (hash MD5 de `artiste_titre`).
+**Automatic deduplication:** a track appearing in multiple CSVs (global hits in the France, US, and World charts) is processed only once, identified by its `track_id` (MD5 hash of `artist_title`).
 
 ---
 
-## Démarrage rapide
+## Quick Start
 
 ```bash
 source venv/bin/activate
 
-# 1. Alimenter la base de données
+# 1. Populate the database
 python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
-# 2. Enrichir la base avec des variantes acoustiques
+# 2. Enrich the database with acoustic variants
 python manage.py augment
 
-# 3. Enrichir les métadonnées (pochettes, genres, dates de sortie)
+# 3. Enrich metadata (album art, genres, release dates)
 python manage.py enrich
 
-# 4. Lancer l'interface web
+# 4. Launch the web interface
 python manage.py start-webapp
 # → http://localhost:5173
 ```
 
 ---
 
-## Commandes essentielles
+## Essential Commands
 
 ```bash
 # ── Ingestion ──────────────────────────────────────────────────────────────
 
-# Alimenter la base (télécharge audio en RAM, calcule embeddings + fingerprints, indexe)
+# Populate the database (downloads audio to RAM, computes embeddings + fingerprints, indexes)
 python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
-# Enrichir la base avec des variantes acoustiques de chaque morceau
+# Enrich the database with acoustic variants of each track
 python manage.py augment
 
-# Enrichir les métadonnées (Deezer + MusicBrainz)
+# Enrich metadata (Deezer + MusicBrainz)
 python manage.py enrich
 
 # ── Identification ─────────────────────────────────────────────────────────
 
-# Identifier un morceau (résultat simple)
-python manage.py identify data/raw/mon_audio.mp3
+# Identify a track (simple output)
+python manage.py identify data/raw/my_audio.mp3
 
-# Avec le détail des scores et le top 10
-python manage.py identify data/raw/mon_audio.mp3 --top 10 --detailed
+# With score details and top 10
+python manage.py identify data/raw/my_audio.mp3 --top 10 --detailed
 
-# Télécharger un extrait de test
+# Download a test clip
 python manage.py download-audio "Daft Punk Get Lucky" --duration 30 --position middle
 
-# ── Interface web ──────────────────────────────────────────────────────────
+# ── Web interface ──────────────────────────────────────────────────────────
 
 python manage.py start-webapp              # dev  → http://localhost:5173
 python manage.py start-webapp --prod       # prod → http://localhost:8000
 
 # ── Maintenance ────────────────────────────────────────────────────────────
 
-# Vérifier l'intégrité des données
+# Check data integrity
 python manage.py check
-python manage.py check --details           # détail des warnings par catégorie
-python manage.py check --purge --yes       # supprimer les tracks corrompus
+python manage.py check --details           # detailed warnings by category
+python manage.py check --purge --yes       # delete corrupted tracks
 
-# Reconstruire l'index FAISS manuellement (après une purge)
+# Rebuild the FAISS index manually (after a purge)
 python manage.py build-index
 ```
 
-> La référence exhaustive de toutes les commandes et options est dans **[COMMANDS.md](./COMMANDS.md)**.
+> The exhaustive reference for all commands and options is in **[COMMANDS.md](./COMMANDS.md)**.
 
 ---
 
 ## Configuration
 
-Tous les paramètres sont centralisés dans `src/config.py`. Aucune constante ne doit être dupliquée ailleurs.
+All parameters are centralized in `src/config.py`. No constant should be duplicated elsewhere.
 
 ```python
-# ── Méthode d'embedding active ─────────────────────────────────────────────
+# ── Active embedding method ────────────────────────────────────────────────
 EMBEDDING_METHOD = "clap"       # "mfcc" | "clap" | "muq" | "mert"
 
-# ── Pipeline d'identification ──────────────────────────────────────────────
-VECTOR_TOP_N_TRACKS = 50        # tracks candidats agrégés par Stage 1 et soumis au Stage 2
-SEGMENT_WIN_S       = 5.0       # durée d'une fenêtre audio (secondes)
-SEGMENT_HOP_S       = 3.0       # pas entre deux fenêtres (secondes)
+# ── Identification pipeline ────────────────────────────────────────────────
+VECTOR_TOP_N_TRACKS = 50        # candidate tracks aggregated by Stage 1 and passed to Stage 2
+SEGMENT_WIN_S       = 5.0       # audio window duration (seconds)
+SEGMENT_HOP_S       = 3.0       # step between windows (seconds)
 
-# ── Augmentation RIR ───────────────────────────────────────────────────────
+# ── RIR augmentation ───────────────────────────────────────────────────────
 RIR_SOURCE  = "synthetic"       # "synthetic" | "mit"
-RIR_N       = 5                 # nombre de RIRs appliquées par track
-RIR_MIT_DIR = "data/rir"        # dossier des WAV MIT (si RIR_SOURCE = "mit")
+RIR_N       = 5                 # number of RIRs applied per track
+RIR_MIT_DIR = "data/rir"        # MIT WAV directory (if RIR_SOURCE = "mit")
 
-# ── Interface web ──────────────────────────────────────────────────────────
-UI_LISTEN_DURATION  = 15        # durée d'enregistrement micro (secondes)
-UI_CONFIDENCE_RATIO = 2.5       # ratio score[0]/score[1] → badge "certain"
+# ── Web interface ──────────────────────────────────────────────────────────
+UI_LISTEN_DURATION  = 15        # microphone recording duration (seconds)
+UI_CONFIDENCE_RATIO = 2.5       # score[0]/score[1] ratio → "confident" badge
 
-# ── Téléchargement ─────────────────────────────────────────────────────────
-DOWNLOAD_WORKERS = 5            # workers parallèles yt-dlp
+# ── Download ───────────────────────────────────────────────────────────────
+DOWNLOAD_WORKERS = 5            # parallel yt-dlp workers
 ```
 
 ---
 
-## Interface web
+## Web Interface
 
-L'interface web permet de reconnaître un morceau directement depuis le navigateur, sans installation supplémentaire côté client.
+The web interface allows track recognition directly from the browser, with no additional client-side installation required.
 
-### Routes API (FastAPI)
+### API Routes (FastAPI)
 
-| Méthode | Route | Corps / Réponse |
-|---------|-------|-----------------|
-| `POST` | `/api/identify` | `multipart/form-data` → JSON (résultats + recommandations) |
+| Method | Route | Body / Response |
+|--------|-------|-----------------|
+| `POST` | `/api/identify` | `multipart/form-data` → JSON (results + recommendations) |
 | `GET` | `/api/config` | JSON (`listen_duration`, `embedding_method`, `confidence_ratio`) |
 | `GET` | `/api/health` | `{"status": "ok"}` |
 
-### Fonctionnalités
+### Features
 
-- **Enregistrement micro** — countdown animé, durée configurable via `UI_LISTEN_DURATION`
-- **Dépôt de fichier** — glisser-déposer ou sélection (MP3, WAV, FLAC, OGG, WebM…)
-- **Résultat** — pochette d'album, titre, artiste, score de confiance, liens de streaming directs (YouTube, Spotify, Deezer, Apple Music)
-- **Recommandations** — 4 morceaux similaires avec modal de détail et liens
-- **Mode debug** — bouton `</>` : top 10 candidats avec scores FP et FAISS séparés
-- **Thème sombre / clair** et **interface bilingue** FR / EN
+- **Microphone recording** — animated countdown, configurable duration via `UI_LISTEN_DURATION`
+- **File upload** — drag-and-drop or file picker (MP3, WAV, FLAC, OGG, WebM…)
+- **Result** — album art, title, artist, confidence score, direct streaming links (YouTube, Spotify, Deezer, Apple Music)
+- **Recommendations** — 4 similar tracks with detail modal and links
+- **Debug mode** — `</>` button: top 10 candidates with separate FP and FAISS scores
+- **Dark / light theme** and **bilingual interface** EN / FR
 
-### Modes de lancement
+### Launch Modes
 
-| Mode | Frontend | Backend | Accès |
-|------|----------|---------|-------|
-| Développement | Vite hot-reload `:5173` | uvicorn `--reload` `:8000` | http://localhost:5173 |
-| Production | Build statique dans `dist/` | uvicorn `:8000` | http://localhost:8000 |
+| Mode | Frontend | Backend | Access |
+|------|----------|---------|--------|
+| Development | Vite hot-reload `:5173` | uvicorn `--reload` `:8000` | http://localhost:5173 |
+| Production | Static build in `dist/` | uvicorn `:8000` | http://localhost:8000 |
 
 ---
 
-## Augmentation RIR
+## RIR Augmentation
 
-Une Room Impulse Response (RIR) est la réponse acoustique d'un espace à un son impulsionnel — elle capture comment une salle colore le son (réflexions, réverbération, absorption). Convoluer un morceau avec une RIR produit une version qui sonne comme si elle avait été enregistrée dans cet espace.
+A Room Impulse Response (RIR) is the acoustic response of a space to an impulse sound — it captures how a room colors audio (reflections, reverberation, absorption). Convolving a track with a RIR produces a version that sounds as if it were recorded in that space.
 
-Le principe : pour chaque track de la base, on génère N versions réverbérées par convolution FFT (`scipy.signal.fftconvolve`), on calcule leurs embeddings, et on les ajoute à ChromaDB et à l'index FAISS. Quand une requête arrive depuis un environnement réverbérant, elle trouve naturellement ses plus proches voisins parmi ces versions augmentées.
+The principle: for each track in the database, N reverberant versions are generated via FFT convolution (`scipy.signal.fftconvolve`), their embeddings are computed, and they are added to ChromaDB and the FAISS index. When a query arrives from a reverberant environment, it naturally finds its nearest neighbors among these augmented versions.
 
-**L'opération est idempotente :** les RIRs déjà appliquées à un track sont mémorisées dans le champ `rir_augmented` de `metadata.parquet` et ignorées lors d'un second appel. Seules les RIRs manquantes sont calculées.
+**The operation is idempotent:** RIRs already applied to a track are recorded in the `rir_augmented` field of `metadata.parquet` and skipped on subsequent calls. Only missing RIRs are computed.
 
-### Génération des RIRs synthétiques
+### Synthetic RIR Generation
 
-Chaque RIR synthétique est construite en trois composantes :
+Each synthetic RIR is built from three components:
 
-1. **Son direct** — pic à 1 ms
-2. **Réflexions précoces** — 12 à 30 réflexions aléatoires avec atténuation exponentielle en fonction du RT60
-3. **Queue diffuse** — bruit gaussien décroissant après 50 ms, simulant la réverbération tardive
+1. **Direct sound** — impulse at 1 ms
+2. **Early reflections** — 12 to 30 random reflections with exponential decay based on RT60
+3. **Diffuse tail** — decaying Gaussian noise after 50 ms, simulating late reverberation
 
-Les 10 environnements prédéfinis couvrent une large plage de RT60 :
+The 10 predefined environments cover a wide RT60 range:
 
-| Environnement | RT60 |
-|---------------|------|
+| Environment | RT60 |
+|-------------|------|
 | `bathroom` | 0.15 s |
 | `small_room` | 0.25 s |
 | `bedroom` | 0.35 s |
@@ -412,203 +399,203 @@ Les 10 environnements prédéfinis couvrent une large plage de RT60 :
 | `large_hall` | 1.20 s |
 | `concert_hall` | 1.60 s |
 
-### Sources disponibles
+### Available Sources
 
-| Source | Description | Avantages |
-|--------|-------------|-----------|
-| `synthetic` | RIRs mathématiques générées (10 environnements, RT60 : 0.15 s – 1.60 s) | Aucun téléchargement, reproductible, rapide |
-| `mit` | Vraies RIRs mesurées en conditions réelles (MIT Acoustical Survey) | Plus réalistes, nécessite les WAV dans `data/rir/` |
+| Source | Description | Advantages |
+|--------|-------------|------------|
+| `synthetic` | Generated mathematical RIRs (10 environments, RT60: 0.15 s – 1.60 s) | No download required, reproducible, fast |
+| `mit` | Real RIRs measured in actual spaces (MIT Acoustical Survey) | More realistic, requires WAV files in `data/rir/` |
 
-Avec `source = "mit"`, le système charge tous les WAV disponibles, estime le RT60 de chacun par intégrale de Schroeder (décroissance d'énergie de −60 dB depuis le pic), puis sélectionne les N les plus diversifiés par échantillonnage uniforme sur la courbe RT60 triée — garantissant une couverture maximale de la plage acoustique.
+With `source = "mit"`, the system loads all available WAV files, estimates each one's RT60 via Schroeder integration (energy decay of −60 dB from peak), then selects the N most diverse ones by uniform sampling over the sorted RT60 curve — guaranteeing maximum coverage of the acoustic range.
 
 ---
 
-## Évaluation
+## Evaluation
 
-Le projet inclut une suite d'évaluation complète pour mesurer et comparer les performances du pipeline.
+The project includes a comprehensive evaluation suite to measure and compare pipeline performance.
 
-### Métriques calculées
+### Metrics
 
-| Métrique | Description |
-|----------|-------------|
-| **Top-1** | Le bon morceau est en première position |
-| **Top-5** | Le bon morceau est dans les 5 premiers résultats |
-| **MRR** | Mean Reciprocal Rank — mesure la qualité du classement |
-| **Latence** | Temps d'identification en secondes |
+| Metric | Description |
+|--------|-------------|
+| **Top-1** | Correct track is in the first position |
+| **Top-5** | Correct track is within the top 5 results |
+| **MRR** | Mean Reciprocal Rank — measures ranking quality |
+| **Latency** | Identification time in seconds |
 
-### Conditions de dégradation
+### Degradation Conditions
 
 | Condition | Description |
 |-----------|-------------|
-| `clean` | Audio sans dégradation |
-| `snr_20` | Bruit blanc à 20 dB SNR |
-| `snr_10` | Bruit blanc à 10 dB SNR (dégradation forte) |
-| `reverb` | Réverbération simulée |
-| `combo` | SNR 10 dB + réverbération combinés |
+| `clean` | No degradation |
+| `snr_20` | White noise at 20 dB SNR |
+| `snr_10` | White noise at 10 dB SNR (heavy degradation) |
+| `reverb` | Simulated reverberation |
+| `combo` | 10 dB SNR + reverberation combined |
 
-### Workflow d'évaluation
+### Evaluation Workflow
 
 ```bash
-# 1. Télécharger des extraits de test (30s, position milieu recommandée)
+# 1. Download test clips (30s, middle position recommended)
 python manage.py download-audio "Miley Cyrus Flowers"        --duration 30 --position middle
 python manage.py download-audio "Travis Scott PARASAIL"      --duration 30 --position middle
 python manage.py download-audio "The Weeknd Blinding Lights" --duration 30 --position middle
 
-# 2. Évaluation pipeline complet — Top-1, Top-5, MRR, latence
+# 2. Full pipeline evaluation — Top-1, Top-5, MRR, latency
 python manage.py evaluate --methods mfcc --methods clap
 
-# 3. Évaluation impact RIR (Stage 1 avec vs sans augmentation)
+# 3. RIR impact evaluation (Stage 1 with vs without augmentation)
 python manage.py rir-evaluate --methods clap
 
-# 4. Générer les 7 graphiques PNG pour le rapport
+# 4. Generate all 7 PNG charts for the report
 python manage.py plots \
   --eval     results/eval/eval_*.json \
   --rir-eval results/eval/rir_eval_*.json
 ```
 
-### Graphiques produits
+### Generated Charts
 
-| Fichier | Graphique | Source |
-|---------|-----------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy avec vs sans RIR par condition | `rir-evaluate` |
-| `rir_delta_*.png` | G2 — Gain Δ apporté par l'augmentation RIR | `rir-evaluate` |
-| `rir_faiss_scores_*.png` | G4 — Score FAISS par morceau avec/sans RIR | `rir-evaluate` |
-| `method_accuracy.png` | G6 — Accuracy Top-1 par méthode et condition | `evaluate` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint) | `evaluate` |
-| `duration_impact.png` | G11 — Accuracy en fonction de la durée d'extrait | `evaluate` |
-| `heatmap_accuracy.png` | G12 — Heatmap méthodes × conditions | `evaluate` |
+| File | Chart | Source |
+|------|-------|--------|
+| `rir_paired_bar_*.png` | G1 — Accuracy with vs without RIR by condition | `rir-evaluate` |
+| `rir_delta_*.png` | G2 — Δ gain from RIR augmentation | `rir-evaluate` |
+| `rir_faiss_scores_*.png` | G4 — FAISS score per track with/without RIR | `rir-evaluate` |
+| `method_accuracy.png` | G6 — Top-1 accuracy per method and condition | `evaluate` |
+| `stage_comparison.png` | G9 — Stage 1 (FAISS only) vs Stage 2 (+ fingerprint) | `evaluate` |
+| `duration_impact.png` | G11 — Accuracy as a function of clip duration | `evaluate` |
+| `heatmap_accuracy.png` | G12 — Methods × conditions heatmap | `evaluate` |
 
 ---
 
-## Stockage des données
+## Data Storage
 
 ### ChromaDB — `data/chroma/`
 
-Base de vecteurs d'embeddings. Une collection par méthode (ex : `clap_clap_htsat_unfused`). Chaque document correspond à un segment audio de 5 secondes, identifié par `{track_id}_{segment_index}`, et annoté de `track_id` et `start_s`.
+Embedding vector database. One collection per method (e.g. `clap_clap_htsat_unfused`). Each document corresponds to a 5-second audio segment, identified by `{track_id}_{segment_index}`, annotated with `track_id` and `start_s`.
 
 ### SQLite — `data/features/fingerprints.db`
 
-Fingerprints spectraux Shazam. Une ligne par track (`INSERT OR REPLACE`, idempotent). Mode WAL activé pour résister aux accès concurrents. Chaque entrée contient les hashes de la constellation spectrale sérialisés en BLOB.
+Shazam spectral fingerprints. One row per track (`INSERT OR REPLACE`, idempotent). WAL mode enabled for concurrent access resistance. Each entry contains spectral constellation hashes serialized as a pickled BLOB.
 
 ### FAISS — `data/index/`
 
-Index de recherche vectorielle par méthode et type :
-- `index_{method}_{type}.faiss` — vecteurs indexés
-- `segments_{method}.parquet` — mapping position FAISS → (`track_id`, `start_s`)
+Vector search index per method and type:
+- `index_{method}_{type}.faiss` — indexed vectors
+- `segments_{method}.parquet` — FAISS position → (`track_id`, `start_s`) mapping
 
-Trois types d'index sont disponibles, configurables via `INDEX_TYPE` dans `config.py` ou avec `--index-type` à la construction :
+Three index types are available, configurable via `INDEX_TYPE` in `config.py` or `--index-type` at build time:
 
-| Type | Algorithme | Précision | Vitesse | Paramètres |
-|------|-----------|-----------|---------|------------|
-| `flat` | Bruteforce — produit scalaire exact (`IndexFlatIP`) | Exacte | Lente | Aucun |
-| `hnsw` | Hierarchical Navigable Small World (`IndexHNSWFlat`) | ~99 % | Rapide | M=32, efConstruction=40 |
-| `ivf` | Listes inversées (`IndexIVFFlat`) | Approchée | Rapide | nlist=√N |
+| Type | Algorithm | Precision | Speed | Parameters |
+|------|-----------|-----------|-------|------------|
+| `flat` | Bruteforce — exact inner product (`IndexFlatIP`) | Exact | Slow | None |
+| `hnsw` | Hierarchical Navigable Small World (`IndexHNSWFlat`) | ~99% | Fast | M=32, efConstruction=40 |
+| `ivf` | Inverted file lists (`IndexIVFFlat`) | Approximate | Fast | nlist=√N |
 
-`flat` est recommandé pour des bases de moins de 100 000 vecteurs — la taille du projet ne justifie pas l'approximation. `hnsw` devient pertinent au-delà. La similarité utilisée est le **produit scalaire** (inner product), les embeddings étant normalisés en amont.
+`flat` is recommended for databases under 100,000 vectors — the project size does not justify approximation. `hnsw` becomes relevant beyond that. The similarity metric used is **inner product**, embeddings being normalized upstream.
 
 ### Parquet — `data/processed/metadata.parquet`
 
-Table centrale des tracks. Colonnes principales :
+Central track table. Main columns:
 
-| Colonne | Description |
-|---------|-------------|
-| `track_id` | Hash MD5 `artiste_titre` |
-| `title`, `artist` | Identité du morceau |
-| `album`, `genre`, `release_date` | Métadonnées enrichies |
-| `cover_url` | URL de la pochette |
-| `embedded_methods` | Liste des méthodes calculées |
+| Column | Description |
+|--------|-------------|
+| `track_id` | MD5 hash of `artist_title` |
+| `title`, `artist` | Track identity |
+| `album`, `genre`, `release_date` | Enriched metadata |
+| `cover_url` | Album art URL |
+| `embedded_methods` | List of computed methods |
 | `rir_augmented` | Dict `{collection: [rir_names]}` |
 
-Écriture atomique (fichier temporaire + rename) pour résister aux crashs en cours d'ingestion.
+Atomic writes (temp file + rename) to survive crashes during ingestion.
 
 ---
 
-## Points d'attention
+## Important Notes
 
-**Reprise automatique sur crash** — `ingest` sauvegarde après chaque track. Un arrêt brutal ne perd qu'au plus le track en cours. Relancer la même commande reprend exactement là où ça s'est arrêté grâce au champ `embedded_methods`.
+**Automatic crash recovery** — `ingest` saves after each track. A sudden interruption loses at most the track in progress. Rerunning the same command resumes exactly where it left off via the `embedded_methods` field.
 
-**Audio en RAM** — l'audio téléchargé via `ingest` n'est jamais écrit sur disque. Il transite directement en mémoire via pipe ffmpeg → librosa. Seuls les embeddings, fingerprints et index sont persistés.
+**Audio in RAM** — audio downloaded via `ingest` is never written to disk. It flows directly into memory via ffmpeg pipe → librosa. Only embeddings, fingerprints, and indexes are persisted.
 
-**Multi-méthode** — plusieurs méthodes peuvent coexister dans la base. Modifier `EMBEDDING_METHOD` dans `config.py` et relancer `ingest` : les tracks déjà traités pour cette méthode sont ignorés, les autres sont complétés.
+**Multi-method** — multiple methods can coexist in the database. Change `EMBEDDING_METHOD` in `config.py` and rerun `ingest`: tracks already processed for this method are skipped, others are completed.
 
-**MuQ sur Apple Silicon** — MuQ ne supporte pas Float16 sur CPU ni sur MPS (opérations ComplexFloat non supportées). Il fonctionne exclusivement sur CUDA. Sur Mac sans GPU NVIDIA, utiliser `clap` ou `mfcc`.
+**MuQ on Apple Silicon** — MuQ does not support Float16 on CPU or MPS (ComplexFloat operations not supported). It runs exclusively on CUDA. On Mac without an NVIDIA GPU, use `clap` or `mfcc`.
 
-**SQLite et accès concurrents** — si le projet réside dans un dossier synchronisé par iCloud, les uploads en arrière-plan peuvent verrouiller `fingerprints.db` et provoquer des erreurs `database is locked`. Le dossier `data/` est exclu d'iCloud via attribut `xattr`. Le mode WAL et un mécanisme de retry sont activés pour gérer les contentions résiduelles.
+**SQLite and concurrent access** — if the project resides in an iCloud-synced folder, background uploads can lock `fingerprints.db` and cause `database is locked` errors. The `data/` directory is excluded from iCloud via `xattr`. WAL mode and a retry mechanism are enabled to handle residual contention.
 
-**Après un `check --purge`** — l'index FAISS est supprimé pendant la purge. Relancer `python manage.py build-index` est obligatoire avant toute identification.
+**After `check --purge`** — the FAISS index is removed during the purge. Running `python manage.py build-index` is mandatory before any identification.
 
 ---
 
 ## Technologies
 
-| Couche | Outils et modèles |
-|--------|-------------------|
-| **Embeddings audio** | `laion/clap-htsat-unfused`, `laion/larger_clap_music`, `OpenMuQ/MuQ-large-msd-iter`, `m-a-p/MERT-v1-95M`, librosa (MFCC) |
-| **Recherche vectorielle** | FAISS (Flat / HNSW / IVF), ChromaDB |
-| **Fingerprinting** | Constellation spectrale Shazam — librosa, scipy (FFT, corrélation) |
+| Layer | Tools and models |
+|-------|-----------------|
+| **Audio embeddings** | `laion/clap-htsat-unfused`, `laion/larger_clap_music`, `OpenMuQ/MuQ-large-msd-iter`, `m-a-p/MERT-v1-95M`, librosa (MFCC) |
+| **Vector search** | FAISS (Flat / HNSW / IVF), ChromaDB |
+| **Fingerprinting** | Shazam spectral constellation — librosa, scipy (FFT, correlation) |
 | **Deep learning** | PyTorch (CUDA / MPS / CPU), Transformers (HuggingFace) |
 | **Audio** | librosa, soundfile, torchaudio, yt-dlp, ffmpeg |
 | **Backend** | FastAPI, uvicorn, pandas, SQLite (WAL), Apache Parquet |
 | **Frontend** | React 18, Vite, JavaScript ES6+ |
-| **Évaluation** | matplotlib, numpy, scipy |
+| **Evaluation** | matplotlib, numpy, scipy |
 
 ---
 
-## Améliorations possibles
+## Future Improvements
 
-Les pistes suivantes ont été identifiées mais non implémentées dans le cadre du projet.
+The following directions were identified but not implemented within the scope of this project.
 
-**Pipeline d'identification**
-- Normalisation croisée des scores FAISS et fingerprint pour rendre le poids relatif indépendant de la taille de la base
-- Fenêtrage adaptatif des segments : fenêtres plus courtes pour les morceaux à forte variation temporelle, plus longues pour les morceaux stables
-- Mise en cache de l'index FAISS en mémoire pour éliminer le temps de chargement lors d'identifications successives
-- Support du streaming audio en temps réel (WebSocket) plutôt qu'un enregistrement de durée fixe
+**Identification pipeline**
+- Cross-normalization of FAISS and fingerprint scores to make relative weight independent of database size
+- Adaptive segment windowing: shorter windows for tracks with high temporal variation, longer for stable ones
+- In-memory FAISS index caching to eliminate load time across successive identifications
+- Real-time audio streaming support (WebSocket) rather than fixed-duration recording
 
 **Embeddings**
-- Fine-tuning de CLAP ou MuQ sur un corpus de morceaux dégradés (bruit, reverb) pour améliorer la robustesse en conditions difficiles
-- Fusion tardive de plusieurs méthodes d'embedding (score ensemble) pour combiner leurs forces respectives
-- Quantification des vecteurs (PQ — Product Quantization) pour réduire l'empreinte mémoire de l'index FAISS
+- Fine-tuning CLAP or MuQ on a corpus of degraded tracks (noise, reverb) to improve robustness in challenging conditions
+- Late fusion of multiple embedding methods (score ensemble) to combine their respective strengths
+- Vector quantization (PQ — Product Quantization) to reduce the FAISS index memory footprint
 
 **Augmentation**
-- Ajout de conditions de dégradation supplémentaires lors de l'augmentation : compression MP3 artefacts, variations de tempo, changements de tonalité
-- Utilisation de vrais enregistrements de bruit ambiant (cafés, transports) plutôt que du bruit blanc gaussien
+- Additional degradation conditions during augmentation: MP3 compression artifacts, tempo variations, pitch shifts
+- Use of real ambient noise recordings (cafés, public transport) instead of Gaussian white noise
 
 **Infrastructure**
-- Remplacement de ChromaDB par un vrai serveur vectoriel (Qdrant, Weaviate, Milvus) pour passer à une base de plusieurs millions de titres
-- Indexation incrémentale FAISS sans reconstruction complète après chaque ingestion
-- API d'ingestion exposée via REST pour alimenter la base sans accès direct au serveur
+- Replace ChromaDB with a dedicated vector server (Qdrant, Weaviate, Milvus) to scale to millions of tracks
+- Incremental FAISS indexing without full reconstruction after each ingestion
+- REST ingestion API to populate the database without direct server access
 
-**Interface web**
-- Historique des identifications côté client (localStorage)
-- Partage du résultat via lien court
-- Affichage des paroles synchronisées (via API externe)
-
----
-
-## Références
-
-Les articles de référence ayant guidé les choix techniques sont disponibles dans le dossier `research_paper/`.
-
-| Auteur(s) | Titre | Pertinence |
-|-----------|-------|------------|
-| Wang, A. (2003) | *An Industrial Strength Audio Search Algorithm* | Fondement du fingerprinting Shazam — constellation spectrale et alignement temporel par histogramme d'offsets |
-| Wu et al. (2023) | *Large-Scale Contrastive Language-Audio Pretraining* (CLAP) | Modèle d'embedding audio-texte multimodal utilisé en Stage 1 |
-| Zhu et al. (2024) | *MuQ: Self-Supervised Music Representation* | Modèle de représentation musicale auto-supervisé, meilleure précision sur corpus musical |
-| Castellon et al. | *Music2Latent2: Audio Embedding via Diffusion* | Méthode alternative d'embedding par modèle de diffusion latent |
-| Défossez et al. | *A Fast Audio Similarity Retrieval Method* | Approche de recherche par similarité audio à grande échelle |
-| Microsoft Research | *Audio Search and Retrieval* | Techniques industrielles de recherche audio à grande échelle |
-| — | *Fast Music Identification* | Comparaison d'approches de fingerprinting pour l'identification rapide |
-| — | *Audio Fingerprinting* | Revue des méthodes de fingerprinting spectral |
-| — | *Predicting Song Title from Audio* | Approches de reconnaissance musicale par apprentissage supervisé |
+**Web interface**
+- Client-side identification history (localStorage)
+- Result sharing via short link
+- Synchronized lyrics display (via external API)
 
 ---
 
-## Équipe
+## References
 
-Projet réalisé dans le cadre du Master Intelligence Artificielle et Data Science (IAD), Semestre 2 — parcours Big Data.
+Reference papers that guided technical decisions are available in the `research_paper/` folder.
 
-| Étudiant | GitHub |
-|----------|--------|
+| Author(s) | Title | Relevance |
+|-----------|-------|-----------|
+| Wang, A. (2003) | *An Industrial Strength Audio Search Algorithm* | Foundation of Shazam fingerprinting — spectral constellation and temporal alignment via offset histogram |
+| Wu et al. (2023) | *Large-Scale Contrastive Language-Audio Pretraining* (CLAP) | Multimodal audio-text embedding model used in Stage 1 |
+| Zhu et al. (2024) | *MuQ: Self-Supervised Music Representation* | Self-supervised music representation model, best precision on musical corpus |
+| Castellon et al. | *Music2Latent2: Audio Embedding via Diffusion* | Alternative embedding approach via latent diffusion model |
+| Défossez et al. | *A Fast Audio Similarity Retrieval Method* | Large-scale audio similarity retrieval approach |
+| Microsoft Research | *Audio Search and Retrieval* | Industrial techniques for large-scale audio search |
+| — | *Fast Music Identification* | Comparison of fingerprinting approaches for rapid identification |
+| — | *Audio Fingerprinting* | Survey of spectral fingerprinting methods |
+| — | *Predicting Song Title from Audio* | Music recognition approaches via supervised learning |
+
+---
+
+## Team
+
+Project completed as part of the Master in Artificial Intelligence and Data Science (IAD), Semester 2 — Big Data track.
+
+| Student | GitHub |
+|---------|--------|
 | AIT MOKHTAR Clara | [@claraait123](https://github.com/claraait123) |
 | AYDIN Maria | [@Mmajora53](https://github.com/Mmajora53) |
 | GOURMELEN Thomas | [@thmsgo18](https://github.com/thmsgo18) |
