@@ -4,18 +4,20 @@ src/evaluation/benchmark.py
 Benchmark de robustesse pour la reconnaissance musicale.
 
 Méthodologie :
-  - Ground truth : Flowers - Miley Cyrus (track_id connu)
-  - 5 cas de test focalisés sur les conditions réelles :
-      1. CLEAN 5s   — cas le plus court, minimal
-      2. CLEAN 15s  — cas nominal Shazam
-      3. CLEAN 30s  — cas long, limite haute
-      4. MIC réel   — enregistrement micro Mac (93-Rue-Belliard.mp3)
-      5. SIM combo  — pire dégradation simulée (bruit+reverb+filtre)
+  - Fichier audio fourni en paramètre (enregistré dans le manifest via download-test)
+  - Le track cible est auto-détecté depuis data/raw/manifest.json
+  - 4 cas de test en mode rapide, ~10 en mode complet :
+      1. CLEAN  | original      — fichier fourni tel quel
+      2. SIM    | bruit SNR 20dB
+      3. SIM    | reverb léger
+      4. SIM    | combo bruit+reverb+filtre (cas difficile)
+      ... (mode --full : +6 dégradations supplémentaires)
 
-  - Option full pour relancer les 14 cas complets
   - Les résultats sont loggés dans results/benchmark/benchmark_TIMESTAMP.json
 
-Point d'entrée public : run_benchmark(label_run, full, compare)
+Points d'entrée publics :
+  run_benchmark(audio, label_run, full)  — lance un benchmark sur un fichier audio
+  run_compare(json_paths)               — compare plusieurs runs JSON
 """
 
 from __future__ import annotations
@@ -34,9 +36,6 @@ import soundfile as sf
 ROOT        = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "results" / "benchmark"
 
-TARGET_TRACK_ID = "f01ab00f1fdc5a57fd2676f4d68631a8"
-TARGET_TITLE    = "Flowers - Miley Cyrus"
-
 # Couleurs terminal
 GREEN  = "\033[92m"
 RED    = "\033[91m"
@@ -45,6 +44,37 @@ CYAN   = "\033[96m"
 BOLD   = "\033[1m"
 RESET  = "\033[0m"
 DIM    = "\033[2m"
+
+
+# ---------------------------------------------------------------------------
+# Lookup manifest
+# ---------------------------------------------------------------------------
+
+def _lookup_target(audio_path: str) -> tuple[str | None, str]:
+    """
+    Cherche le track_id et le label lisible d'un fichier audio dans le manifest.
+
+    Returns:
+        (track_id, label) — track_id peut être None si non trouvé.
+    """
+    manifest = ROOT / "data" / "raw" / "manifest.json"
+    filename = Path(audio_path).name
+
+    if manifest.exists():
+        try:
+            with open(manifest, encoding="utf-8") as f:
+                entries = json.load(f)
+            for entry in entries:
+                if entry.get("filename") == filename:
+                    artist = entry.get("artist", "")
+                    title  = entry.get("title", "")
+                    label  = f"{artist} — {title}".strip(" —") or filename
+                    return entry.get("track_id"), label
+        except Exception:
+            pass
+
+    # Non trouvé dans le manifest — on continue sans target connu
+    return None, Path(audio_path).stem
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +108,10 @@ def add_reverb(waveform: np.ndarray, sr: int, decay: float = 0.3) -> np.ndarray:
     return reverbed.astype(np.float32)
 
 
-def apply_bandpass(waveform: np.ndarray, sr: int, low_hz: float = 200, high_hz: float = 7000) -> np.ndarray:
+def apply_bandpass(waveform: np.ndarray, sr: int, low_hz: float = 300, high_hz: float = 7000) -> np.ndarray:
     """Filtre passe-bande pour simuler la réponse d'un micro bas de gamme."""
     from scipy.signal import butter, sosfilt
-    sos = butter(4, [low_hz, high_hz], btype='band', fs=sr, output='sos')
+    sos = butter(4, [low_hz, high_hz], btype="band", fs=sr, output="sos")
     return sosfilt(sos, waveform).astype(np.float32)
 
 
@@ -125,15 +155,83 @@ def compute_snr(clean: np.ndarray, noisy: np.ndarray) -> float:
     signal_power = np.mean(clean ** 2)
     noise_power  = np.mean(noise ** 2)
     if noise_power == 0:
-        return float('inf')
+        return float("inf")
     return 10 * np.log10(signal_power / noise_power)
+
+
+# ---------------------------------------------------------------------------
+# Suite de tests
+# ---------------------------------------------------------------------------
+
+def build_test_suite(audio_path: str, full: bool = False) -> list[dict]:
+    """
+    Construit la liste des cas de test à partir du fichier audio fourni.
+
+    Args:
+        audio_path: chemin vers le fichier audio de référence (clean).
+        full:       si True, génère ~10 cas (défaut : 4 cas rapides).
+
+    Returns:
+        Liste de dicts {label, path, type, tmp?}.
+    """
+    tests   = []
+    base_sr = 22050
+
+    # Cas 1 : fichier original fourni tel quel
+    if os.path.exists(audio_path):
+        tests.append({"label": "CLEAN  | original", "path": audio_path, "type": "real"})
+    else:
+        print(f"{RED}  [ERREUR] Fichier introuvable : {audio_path}{RESET}")
+        return tests
+
+    # Chargement pour générer les dégradations simulées
+    try:
+        waveform, sr = librosa.load(audio_path, sr=base_sr, mono=True)
+    except Exception as e:
+        print(f"{RED}  [ERREUR] Impossible de charger l'audio : {e}{RESET}")
+        return tests
+
+    np.random.seed(42)
+
+    if full:
+        sim_cases = [
+            ("SIM    | bruit SNR 20dB",    add_noise_at_snr(waveform, 20)),
+            ("SIM    | bruit SNR 10dB",    add_noise_at_snr(waveform, 10)),
+            ("SIM    | bruit SNR  5dB",    add_noise_at_snr(waveform,  5)),
+            ("SIM    | reverb léger",       add_reverb(waveform, sr, decay=0.3)),
+            ("SIM    | reverb fort",        add_reverb(waveform, sr, decay=0.6)),
+            ("SIM    | reverb+bruit 20dB",  add_reverb(add_noise_at_snr(waveform, 20), sr)),
+            ("SIM    | reverb+bruit 10dB",  add_reverb(add_noise_at_snr(waveform, 10), sr)),
+            ("SIM    | bandpass 300-7kHz",  apply_bandpass(waveform, sr, 300, 7000)),
+            ("SIM    | combo 15dB+rev+bp",  apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
+            ("SIM    | codec Opus 32kbps",  simulate_opus_codec(waveform, sr, 32000)),
+        ]
+    else:
+        sim_cases = [
+            ("SIM    | bruit SNR 20dB",   add_noise_at_snr(waveform, 20)),
+            ("SIM    | reverb léger",      add_reverb(waveform, sr, decay=0.3)),
+            ("SIM    | combo 15dB+rev+bp", apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
+        ]
+
+    for label, degraded in sim_cases:
+        tmp_path = save_temp_wav(degraded, sr)
+        real_snr = compute_snr(waveform, degraded)
+        tests.append({
+            "label": f"{label} (SNR={real_snr:.1f}dB)",
+            "path":  tmp_path,
+            "type":  "simulated",
+            "tmp":   True,
+        })
+
+    return tests
 
 
 # ---------------------------------------------------------------------------
 # Identification
 # ---------------------------------------------------------------------------
 
-def run_identification(audio_path: str, method: str | None = None) -> dict:
+def run_identification(audio_path: str, target_track_id: str | None,
+                       method: str | None = None) -> dict:
     """Lance identify_track et extrait les métriques clés."""
     from src.retrieval.query_pipeline import identify_track
 
@@ -144,7 +242,7 @@ def run_identification(audio_path: str, method: str | None = None) -> dict:
         return {
             "success": False, "error": str(e),
             "rank": None, "score_top1": None, "ratio": None,
-            "score_flowers_faiss": None, "score_flowers_fp": None, "score_flowers_final": None,
+            "score_target_faiss": None, "score_target_fp": None, "score_target_final": None,
             "elapsed_s": time.time() - t0,
         }
     elapsed = time.time() - t0
@@ -153,38 +251,38 @@ def run_identification(audio_path: str, method: str | None = None) -> dict:
         return {
             "success": False, "error": "no results",
             "rank": None, "score_top1": None, "ratio": None,
-            "score_flowers_faiss": None, "score_flowers_fp": None, "score_flowers_final": None,
+            "score_target_faiss": None, "score_target_fp": None, "score_target_final": None,
             "elapsed_s": elapsed,
         }
 
-    rank = None
-    flowers_faiss = flowers_fp = flowers_final = None
-    for i, r in enumerate(results):
-        if r[0] == TARGET_TRACK_ID:
-            rank          = i + 1
-            flowers_final = r[1]
-            flowers_faiss = r[2]
-            flowers_fp    = r[3]
-            break
+    rank = target_faiss = target_fp = target_final = None
+    if target_track_id:
+        for i, r in enumerate(results):
+            if r[0] == target_track_id:
+                rank         = i + 1
+                target_final = r[1]
+                target_faiss = r[2]
+                target_fp    = r[3]
+                break
 
     score0 = results[0][1]
     score1 = results[1][1] if len(results) > 1 else 0
-    ratio  = score0 / score1 if score1 > 0 else float('inf')
+    ratio  = score0 / score1 if score1 > 0 else float("inf")
 
     return {
         "success":             True,
         "error":               None,
         "rank":                rank,
-        "top1_is_flowers":     results[0][0] == TARGET_TRACK_ID,
+        "top1_is_target":      (results[0][0] == target_track_id) if target_track_id else None,
         "score_top1":          round(score0,        4),
         "ratio":               round(ratio,         3),
-        "score_flowers_faiss": round(flowers_faiss, 4) if flowers_faiss is not None else None,
-        "score_flowers_fp":    round(flowers_fp,    6) if flowers_fp    is not None else None,
-        "score_flowers_final": round(flowers_final, 4) if flowers_final is not None else None,
+        "score_target_faiss":  round(target_faiss,  4) if target_faiss  is not None else None,
+        "score_target_fp":     round(target_fp,     6) if target_fp     is not None else None,
+        "score_target_final":  round(target_final,  4) if target_final  is not None else None,
         "elapsed_s":           round(elapsed,       1),
         "all_results": [
-            {"rank": i+1, "track_id": r[0], "score": round(r[1],4),
-             "faiss": round(r[2],4), "fp": round(r[3],6)}
+            {"rank": i+1, "track_id": r[0], "score": round(r[1], 4),
+             "faiss": round(r[2], 4), "fp": round(r[3], 6)}
             for i, r in enumerate(results)
         ],
     }
@@ -205,16 +303,16 @@ def print_result_row(label: str, res: dict, width: int = 42):
     if not res["success"]:
         print(f"  {label_str}  {RED}ERREUR : {res['error']}{RESET}")
         return
-    rank    = res["rank"]
-    r_col   = rank_color(rank) if rank else RED
+    rank     = res["rank"]
+    r_col    = rank_color(rank) if rank else RED
     rank_str = f"#{rank}" if rank else "NF"
     ok = "✅" if rank == 1 else ("⚠️ " if rank and rank <= 3 else "❌")
     print(
         f"  {label_str}  "
         f"{r_col}{rank_str:>4}{RESET}  "
-        f"score={res['score_flowers_final'] or 0:>9.4f}  "
-        f"faiss={res['score_flowers_faiss'] or 0:>9.4f}  "
-        f"fp={res['score_flowers_fp'] or 0:.4f}  "
+        f"score={res['score_target_final'] or 0:>9.4f}  "
+        f"faiss={res['score_target_faiss'] or 0:>9.4f}  "
+        f"fp={res['score_target_fp'] or 0:.4f}  "
         f"ratio={res['ratio']:>5.2f}  "
         f"{res['elapsed_s']:>5.1f}s  {ok}"
     )
@@ -231,107 +329,51 @@ def print_header():
 
 
 # ---------------------------------------------------------------------------
-# Suite de tests
-# ---------------------------------------------------------------------------
-
-def build_test_suite(full: bool = False) -> list[dict]:
-    """Construit la liste des cas de test (5 en mode rapide, 14 en mode complet)."""
-    tests   = []
-    base_sr = 22050
-
-    raw_dir    = ROOT / "data" / "raw"
-    real_files = [
-        ("CLEAN  | middle  5s", str(raw_dir / "Miley Cyrus - Flowers (Official Video)__middle_5s.mp3")),
-        ("CLEAN  | middle 15s", str(raw_dir / "Miley Cyrus - Flowers (Official Video)__middle_15s.mp3")),
-        ("CLEAN  | middle 30s", str(raw_dir / "Miley Cyrus - Flowers (Official Video)__middle_30s.mp3")),
-        ("MIC    | reel   24s", str(raw_dir / "93-Rue-Belliard.mp3")),
-    ]
-    if full:
-        real_files.insert(3, (
-            "CLEAN  | start  30s",
-            str(raw_dir / "Miley Cyrus - Flowers (Official Video)__start_30s.mp3"),
-        ))
-
-    for label, path in real_files:
-        if os.path.exists(path):
-            tests.append({"label": label, "path": path, "type": "real"})
-        else:
-            print(f"{YELLOW}  [SKIP] Fichier manquant : {path}{RESET}")
-
-    clean_path = str(raw_dir / "Miley Cyrus - Flowers (Official Video)__middle_15s.mp3")
-    if not os.path.exists(clean_path):
-        print(f"{YELLOW}  [SKIP] Fichier de référence manquant pour simulations{RESET}")
-        return tests
-
-    waveform, sr = librosa.load(clean_path, sr=base_sr, mono=True)
-    np.random.seed(42)
-
-    if full:
-        sim_cases = [
-            ("SIM    | bruit SNR 30dB",     add_noise_at_snr(waveform, 30)),
-            ("SIM    | bruit SNR 20dB",     add_noise_at_snr(waveform, 20)),
-            ("SIM    | bruit SNR 10dB",     add_noise_at_snr(waveform, 10)),
-            ("SIM    | bruit SNR  5dB",     add_noise_at_snr(waveform,  5)),
-            ("SIM    | reverb 30dB+reverb", add_reverb(add_noise_at_snr(waveform, 30), sr, decay=0.3)),
-            ("SIM    | reverb 10dB+reverb", add_reverb(add_noise_at_snr(waveform, 10), sr, decay=0.3)),
-            ("SIM    | bandpass 300-7kHz",  apply_bandpass(waveform, sr, 300, 7000)),
-            ("SIM    | combo 15dB+rev+bp",  apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
-            ("SIM    | codec Opus 32kbps",  simulate_opus_codec(waveform, sr, 32000)),
-        ]
-    else:
-        sim_cases = [
-            ("SIM    | combo 15dB+rev+bp", apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
-        ]
-
-    for label, degraded in sim_cases:
-        tmp_path = save_temp_wav(degraded, sr)
-        real_snr = compute_snr(waveform, degraded)
-        tests.append({
-            "label": f"{label} (SNR={real_snr:.1f}dB)",
-            "path": tmp_path,
-            "type": "simulated",
-            "tmp": True,
-        })
-
-    return tests
-
-
-# ---------------------------------------------------------------------------
 # Points d'entrée publics
 # ---------------------------------------------------------------------------
 
 def run_benchmark(
+    audio: str,
     label_run: str = "baseline",
     full: bool = False,
-    method: str | None = None,
 ) -> dict:
     """
-    Lance le benchmark de robustesse et sauvegarde les résultats en JSON.
+    Lance le benchmark de robustesse sur un fichier audio et sauvegarde les résultats.
+
+    Le track cible est auto-détecté depuis data/raw/manifest.json.
+    La méthode d'embedding est lue depuis src/config.py (EMBEDDING_METHOD).
 
     Args:
-        label_run: nom du run (ex: "A6_ma_modif").
-        full:      si True, exécute les 14 cas (défaut : 5 cas).
-        method:    méthode d'embedding à utiliser (défaut : config.EMBEDDING_METHOD).
+        audio:     chemin vers le fichier audio de test (doit être dans le manifest).
+        label_run: nom du run pour la traçabilité.
+        full:      si True, exécute ~10 cas (défaut : 4 cas).
 
     Returns:
         Dict avec les résultats complets du run.
     """
     import src.config as config
-    effective_method = method or config.EMBEDDING_METHOD
+
+    target_track_id, target_label = _lookup_target(audio)
+    method = config.EMBEDDING_METHOD
+    mode_str = "MODE COMPLET (~10 cas)" if full else "MODE RAPIDE (4 cas)"
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    mode_str = "MODE COMPLET (14 cas)" if full else "MODE RAPIDE (5 cas)"
 
     print(f"\n{BOLD}{CYAN}{'═'*90}{RESET}")
     print(f"{BOLD}{CYAN}  BENCHMARK — {label_run}  [{mode_str}]{RESET}")
-    print(f"{BOLD}{CYAN}  Méthode     : {effective_method.upper()}{RESET}")
-    print(f"{BOLD}{CYAN}  Ground truth : {TARGET_TITLE} ({TARGET_TRACK_ID}){RESET}")
-    print(f"{BOLD}{CYAN}  Date : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
+    print(f"{BOLD}{CYAN}  Méthode      : {method.upper()}{RESET}")
+    print(f"{BOLD}{CYAN}  Fichier test : {Path(audio).name}{RESET}")
+    if target_track_id:
+        print(f"{BOLD}{CYAN}  Track cible  : {target_label} ({target_track_id}){RESET}")
+    else:
+        print(f"{YELLOW}  Track cible  : non trouvé dans le manifest — rang non calculé{RESET}")
+        print(f"{YELLOW}  Lance d'abord : python manage.py download-test \"<artiste titre>\"{RESET}")
+    print(f"{BOLD}{CYAN}  Date         : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
     print(f"{BOLD}{CYAN}{'═'*90}{RESET}")
 
-    tests = build_test_suite(full=full)
+    tests = build_test_suite(audio_path=audio, full=full)
     if not tests:
-        print(f"{RED}  Aucun fichier de test trouvé.{RESET}")
+        print(f"{RED}  Aucun fichier de test généré.{RESET}")
         return {}
 
     print(f"\n  {len(tests)} cas de test à exécuter...")
@@ -343,7 +385,7 @@ def run_benchmark(
     for test in tests:
         if test.get("tmp"):
             tmp_files.append(test["path"])
-        res = run_identification(test["path"], method=method)
+        res = run_identification(test["path"], target_track_id=target_track_id, method=None)
         all_results[test["label"]] = {**res, "type": test["type"]}
         print_result_row(test["label"], res)
 
@@ -354,31 +396,34 @@ def run_benchmark(
             pass
 
     print(f"\n{BOLD}  Récapitulatif :{RESET}")
-    success = [r for r in all_results.values() if r.get("top1_is_flowers")]
+    success = [r for r in all_results.values() if r.get("top1_is_target")]
     total   = len(all_results)
-    print(f"  Top-1 correct : {len(success)}/{total} ({100*len(success)/total:.0f}%)")
-
-    real_tests = {k: v for k, v in all_results.items() if v["type"] == "real"}
-    sim_tests  = {k: v for k, v in all_results.items() if v["type"] == "simulated"}
-    if real_tests:
-        ranks = [v['rank'] for v in real_tests.values() if v.get('rank')]
-        if ranks:
-            print(f"  Fichiers réels  — Rank moyen : {np.mean(ranks):.1f}")
-    if sim_tests:
-        ranks = [v['rank'] for v in sim_tests.values() if v.get('rank')]
-        if ranks:
-            print(f"  Simulations     — Rank moyen : {np.mean(ranks):.1f}")
+    if target_track_id:
+        print(f"  Top-1 correct : {len(success)}/{total} ({100*len(success)/total:.0f}%)")
+        real_tests = {k: v for k, v in all_results.items() if v["type"] == "real"}
+        sim_tests  = {k: v for k, v in all_results.items() if v["type"] == "simulated"}
+        if real_tests:
+            ranks = [v["rank"] for v in real_tests.values() if v.get("rank")]
+            if ranks:
+                print(f"  Fichiers réels  — Rank moyen : {np.mean(ranks):.1f}")
+        if sim_tests:
+            ranks = [v["rank"] for v in sim_tests.values() if v.get("rank")]
+            if ranks:
+                print(f"  Simulations     — Rank moyen : {np.mean(ranks):.1f}")
+    else:
+        print(f"  {total} cas exécutés (pas de target connu — Top-1 non calculé)")
 
     out = {
         "run_label": label_run,
-        "method":    effective_method,
+        "method":    method,
         "timestamp": datetime.now().isoformat(),
-        "target":    {"track_id": TARGET_TRACK_ID, "title": TARGET_TITLE},
+        "audio":     str(audio),
+        "target":    {"track_id": target_track_id, "label": target_label},
         "results":   all_results,
         "summary": {
             "total_tests":       total,
-            "top1_correct":      len(success),
-            "top1_accuracy_pct": round(100 * len(success) / total, 1),
+            "top1_correct":      len(success) if target_track_id else None,
+            "top1_accuracy_pct": round(100 * len(success) / total, 1) if target_track_id else None,
         },
     }
 
@@ -437,7 +482,10 @@ def run_compare(json_paths: list[str]) -> None:
 
     print(f"\n  Top-1 accuracy :")
     for run in runs:
-        pct = run["summary"]["top1_accuracy_pct"]
+        pct = run["summary"].get("top1_accuracy_pct")
+        if pct is None:
+            print(f"    {run['run_label']:30s} : (pas de target connu)")
+            continue
         col = GREEN if pct >= 80 else (YELLOW if pct >= 50 else RED)
         print(
             f"    {run['run_label']:30s} : "

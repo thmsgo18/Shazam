@@ -253,17 +253,11 @@ Kaggle `spotify-streaming-top-50-*.csv` files are directly compatible. Place the
 ```bash
 source venv/bin/activate
 
-# 1. Populate the database
-python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
+# One command runs the full pipeline: ingest → augment → enrich
+python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
-# 2. Enrich the database with acoustic variants
-python manage.py augment
-
-# 3. Enrich metadata (album art, genres, release dates)
-python manage.py enrich
-
-# 4. Launch the web interface
-python manage.py start-webapp
+# Launch the web interface
+python manage.py webapp
 # → http://localhost:5173
 ```
 
@@ -272,15 +266,14 @@ python manage.py start-webapp
 ## Essential Commands
 
 ```bash
-# ── Ingestion ──────────────────────────────────────────────────────────────
+# ── Construction ───────────────────────────────────────────────────────────
 
-# Populate the database (downloads audio to RAM, computes embeddings + fingerprints, indexes)
+# Full pipeline in one command: ingest → augment → enrich
+python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv
+
+# Or step by step
 python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
-
-# Enrich the database with acoustic variants of each track
 python manage.py augment
-
-# Enrich metadata (Deezer + MusicBrainz)
 python manage.py enrich
 
 # ── Identification ─────────────────────────────────────────────────────────
@@ -291,23 +284,26 @@ python manage.py identify data/raw/my_audio.mp3
 # With score details and top 10
 python manage.py identify data/raw/my_audio.mp3 --top 10 --detailed
 
-# Download a test clip
-python manage.py download-audio "Daft Punk Get Lucky" --duration 30 --position middle
+# Download a test clip (saved to data/raw/ + registered in manifest)
+python manage.py download-test "Daft Punk Get Lucky" --duration 30 --position middle
 
 # ── Web interface ──────────────────────────────────────────────────────────
 
-python manage.py start-webapp              # dev  → http://localhost:5173
-python manage.py start-webapp --prod       # prod → http://localhost:8000
+python manage.py webapp                    # dev  → http://localhost:5173
+python manage.py webapp --prod             # prod → http://localhost:8000
 
 # ── Maintenance ────────────────────────────────────────────────────────────
+
+# Check active configuration
+python manage.py config
 
 # Check data integrity
 python manage.py check
 python manage.py check --details           # detailed warnings by category
 python manage.py check --purge --yes       # delete corrupted tracks
 
-# Rebuild the FAISS index manually (after a purge)
-python manage.py build-index
+# Rebuild after a purge
+python manage.py rebuild --what index
 ```
 
 > The exhaustive reference for all commands and options is in **[COMMANDS.md](./COMMANDS.md)**.
@@ -441,18 +437,18 @@ The project includes a comprehensive evaluation suite to measure and compare pip
 
 ```bash
 # 1. Download test clips (30s, middle position recommended)
-python manage.py download-audio "Miley Cyrus Flowers"        --duration 30 --position middle
-python manage.py download-audio "Travis Scott PARASAIL"      --duration 30 --position middle
-python manage.py download-audio "The Weeknd Blinding Lights" --duration 30 --position middle
+python manage.py download-test "Miley Cyrus Flowers"        --duration 30 --position middle
+python manage.py download-test "Travis Scott PARASAIL"      --duration 30 --position middle
+python manage.py download-test "The Weeknd Blinding Lights" --duration 30 --position middle
 
 # 2. Full pipeline evaluation — Top-1, Top-5, MRR, latency
-python manage.py evaluate --methods mfcc --methods clap
+python manage.py eval multi
 
 # 3. RIR impact evaluation (Stage 1 with vs without augmentation)
-python manage.py rir-evaluate --methods clap
+python manage.py eval rir --n-tracks 0
 
 # 4. Generate all 7 PNG charts for the report
-python manage.py plots \
+python manage.py eval plots \
   --eval     results/eval/eval_*.json \
   --rir-eval results/eval/rir_eval_*.json
 ```
@@ -461,13 +457,13 @@ python manage.py plots \
 
 | File | Chart | Source |
 |------|-------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy with vs without RIR by condition | `rir-evaluate` |
-| `rir_delta_*.png` | G2 — Δ gain from RIR augmentation | `rir-evaluate` |
-| `rir_faiss_scores_*.png` | G4 — FAISS score per track with/without RIR | `rir-evaluate` |
-| `method_accuracy.png` | G6 — Top-1 accuracy per method and condition | `evaluate` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS only) vs Stage 2 (+ fingerprint) | `evaluate` |
-| `duration_impact.png` | G11 — Accuracy as a function of clip duration | `evaluate` |
-| `heatmap_accuracy.png` | G12 — Methods × conditions heatmap | `evaluate` |
+| `rir_paired_bar_*.png` | G1 — Accuracy with vs without RIR by condition | `eval rir` |
+| `rir_delta_*.png` | G2 — Δ gain from RIR augmentation | `eval rir` |
+| `rir_faiss_scores_*.png` | G4 — FAISS score per track with/without RIR | `eval rir` |
+| `method_accuracy.png` | G6 — Top-1 accuracy per method and condition | `eval multi` |
+| `stage_comparison.png` | G9 — Stage 1 (FAISS only) vs Stage 2 (+ fingerprint) | `eval multi` |
+| `duration_impact.png` | G11 — Accuracy as a function of clip duration | `eval multi` |
+| `heatmap_accuracy.png` | G12 — Methods × conditions heatmap | `eval multi` |
 
 ---
 
@@ -526,7 +522,7 @@ Atomic writes (temp file + rename) to survive crashes during ingestion.
 
 **SQLite and concurrent access** — if the project resides in an iCloud-synced folder, background uploads can lock `fingerprints.db` and cause `database is locked` errors. The `data/` directory is excluded from iCloud via `xattr`. WAL mode and a retry mechanism are enabled to handle residual contention.
 
-**After `check --purge`** — the FAISS index is removed during the purge. Running `python manage.py build-index` is mandatory before any identification.
+**After `check --purge`** — the FAISS index is removed during the purge. Running `python manage.py rebuild --what index` is mandatory before any identification.
 
 ---
 

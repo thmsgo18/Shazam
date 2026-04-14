@@ -268,17 +268,11 @@ Les CSV Kaggle `spotify-streaming-top-50-*.csv` sont directement compatibles. Pl
 ```bash
 source venv/bin/activate
 
-# 1. Alimenter la base de données
-python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
+# Une seule commande pour tout faire : ingest → augment → enrich
+python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv
 
-# 2. Enrichir la base avec des variantes acoustiques
-python manage.py augment
-
-# 3. Enrichir les métadonnées (pochettes, genres, dates de sortie)
-python manage.py enrich
-
-# 4. Lancer l'interface web
-python manage.py start-webapp
+# Lancer l'interface web
+python manage.py webapp
 # → http://localhost:5173
 ```
 
@@ -287,15 +281,14 @@ python manage.py start-webapp
 ## Commandes essentielles
 
 ```bash
-# ── Ingestion ──────────────────────────────────────────────────────────────
+# ── Construction ───────────────────────────────────────────────────────────
 
-# Alimenter la base (télécharge audio en RAM, calcule embeddings + fingerprints, indexe)
+# Pipeline complet en une commande : ingest → augment → enrich
+python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv
+
+# Ou étape par étape
 python manage.py ingest --csv data/kaggle/data/spotify-streaming-top-50-world.csv
-
-# Enrichir la base avec des variantes acoustiques de chaque morceau
 python manage.py augment
-
-# Enrichir les métadonnées (Deezer + MusicBrainz)
 python manage.py enrich
 
 # ── Identification ─────────────────────────────────────────────────────────
@@ -306,23 +299,26 @@ python manage.py identify data/raw/mon_audio.mp3
 # Avec le détail des scores et le top 10
 python manage.py identify data/raw/mon_audio.mp3 --top 10 --detailed
 
-# Télécharger un extrait de test
-python manage.py download-audio "Daft Punk Get Lucky" --duration 30 --position middle
+# Télécharger un extrait de test (sauvegardé dans data/raw/ + ajouté au manifest)
+python manage.py download-test "Daft Punk Get Lucky" --duration 30 --position middle
 
 # ── Interface web ──────────────────────────────────────────────────────────
 
-python manage.py start-webapp              # dev  → http://localhost:5173
-python manage.py start-webapp --prod       # prod → http://localhost:8000
+python manage.py webapp                    # dev  → http://localhost:5173
+python manage.py webapp --prod             # prod → http://localhost:8000
 
 # ── Maintenance ────────────────────────────────────────────────────────────
+
+# Afficher la configuration active
+python manage.py config
 
 # Vérifier l'intégrité des données
 python manage.py check
 python manage.py check --details           # détail des warnings par catégorie
 python manage.py check --purge --yes       # supprimer les tracks corrompus
 
-# Reconstruire l'index FAISS manuellement (après une purge)
-python manage.py build-index
+# Reconstruire après une purge
+python manage.py rebuild --what index
 ```
 
 > La référence exhaustive de toutes les commandes et options est dans **[COMMANDS.md](./COMMANDS.md)**.
@@ -456,18 +452,18 @@ Le projet inclut une suite d'évaluation complète pour mesurer et comparer les 
 
 ```bash
 # 1. Télécharger des extraits de test (30s, position milieu recommandée)
-python manage.py download-audio "Miley Cyrus Flowers"        --duration 30 --position middle
-python manage.py download-audio "Travis Scott PARASAIL"      --duration 30 --position middle
-python manage.py download-audio "The Weeknd Blinding Lights" --duration 30 --position middle
+python manage.py download-test "Miley Cyrus Flowers"        --duration 30 --position middle
+python manage.py download-test "Travis Scott PARASAIL"      --duration 30 --position middle
+python manage.py download-test "The Weeknd Blinding Lights" --duration 30 --position middle
 
 # 2. Évaluation pipeline complet — Top-1, Top-5, MRR, latence
-python manage.py evaluate --methods mfcc --methods clap
+python manage.py eval multi
 
 # 3. Évaluation impact RIR (Stage 1 avec vs sans augmentation)
-python manage.py rir-evaluate --methods clap
+python manage.py eval rir --n-tracks 0
 
 # 4. Générer les 7 graphiques PNG pour le rapport
-python manage.py plots \
+python manage.py eval plots \
   --eval     results/eval/eval_*.json \
   --rir-eval results/eval/rir_eval_*.json
 ```
@@ -476,13 +472,13 @@ python manage.py plots \
 
 | Fichier | Graphique | Source |
 |---------|-----------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy avec vs sans RIR par condition | `rir-evaluate` |
-| `rir_delta_*.png` | G2 — Gain Δ apporté par l'augmentation RIR | `rir-evaluate` |
-| `rir_faiss_scores_*.png` | G4 — Score FAISS par morceau avec/sans RIR | `rir-evaluate` |
-| `method_accuracy.png` | G6 — Accuracy Top-1 par méthode et condition | `evaluate` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint) | `evaluate` |
-| `duration_impact.png` | G11 — Accuracy en fonction de la durée d'extrait | `evaluate` |
-| `heatmap_accuracy.png` | G12 — Heatmap méthodes × conditions | `evaluate` |
+| `rir_paired_bar_*.png` | G1 — Accuracy avec vs sans RIR par condition | `eval rir` |
+| `rir_delta_*.png` | G2 — Gain Δ apporté par l'augmentation RIR | `eval rir` |
+| `rir_faiss_scores_*.png` | G4 — Score FAISS par morceau avec/sans RIR | `eval rir` |
+| `method_accuracy.png` | G6 — Accuracy Top-1 par méthode et condition | `eval multi` |
+| `stage_comparison.png` | G9 — Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint) | `eval multi` |
+| `duration_impact.png` | G11 — Accuracy en fonction de la durée d'extrait | `eval multi` |
+| `heatmap_accuracy.png` | G12 — Heatmap méthodes × conditions | `eval multi` |
 
 ---
 
@@ -541,7 +537,7 @@ Table centrale des tracks. Colonnes principales :
 
 **SQLite et accès concurrents** — si le projet réside dans un dossier synchronisé par iCloud, les uploads en arrière-plan peuvent verrouiller `fingerprints.db` et provoquer des erreurs `database is locked`. Le dossier `data/` est exclu d'iCloud via attribut `xattr`. Le mode WAL et un mécanisme de retry sont activés pour gérer les contentions résiduelles.
 
-**Après un `check --purge`** — l'index FAISS est supprimé pendant la purge. Relancer `python manage.py build-index` est obligatoire avant toute identification.
+**Après un `check --purge`** — l'index FAISS est supprimé pendant la purge. Relancer `python manage.py rebuild --what index` est obligatoire avant toute identification.
 
 ---
 
