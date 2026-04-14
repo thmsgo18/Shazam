@@ -1,6 +1,10 @@
 # Shazam
 
-> **Language / Langue :** English | [Français](./README.fr.md)
+<div align="right">
+  <img src="https://img.shields.io/badge/EN-current-222?style=flat-square" alt="English (current)">
+  &nbsp;
+  <a href="./README.fr.md"><img src="https://img.shields.io/badge/FR-version-0055A4?style=flat-square&labelColor=EF4135" alt="Lire en Français"></a>
+</div>
 
 ![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
