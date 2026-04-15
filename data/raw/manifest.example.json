@@ -1,0 +1,18 @@
+[
+  {
+    "filename": "reference_clips/Artist-Title-middle_15s.mp3",
+    "track_id": "<track_id>",
+    "artist": "Artist",
+    "title": "Title",
+    "position": "middle",
+    "duration_s": 15.0
+  },
+  {
+    "filename": "mic_recordings/Artist-Title-mic-normal-clean.mp3",
+    "track_id": "<track_id>",
+    "artist": "Artist",
+    "title": "Title",
+    "position": "mic_normal_clean",
+    "duration_s": 20.0
+  }
+]
