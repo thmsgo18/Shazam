@@ -19,7 +19,7 @@ python manage.py <command> --help
 
 | Group | Commands |
 |-------|----------|
-| [Construction](#construction) | `build` · `ingest` · `augment` · `enrich` |
+| [Construction](#construction) | `build` · `ingest` · `download-kaggle-csvs` · `augment` · `enrich` |
 | [Maintenance](#maintenance) | `check` · `rebuild` · `clean` |
 | [Tests](#tests) | `test` |
 | [Usage](#usage) | `config` · `identify` · `download-test` |
@@ -41,7 +41,7 @@ python manage.py build [OPTIONS]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--csv PATH` | all CSVs in `data/kaggle/` | Kaggle CSV path (repeatable) |
+| `--csv PATH` | all CSVs in `data/kaggle/data/` | Kaggle CSV path (repeatable) |
 | `--skip-rir` | `False` | Skip the RIR augmentation step |
 | `--skip-enrich` | `False` | Skip the metadata enrichment step |
 
@@ -54,7 +54,7 @@ python manage.py build \
   --csv data/kaggle/data/spotify-streaming-top-50-france.csv \
   --csv data/kaggle/data/spotify-streaming-top-50-usa.csv
 
-# All CSVs in data/kaggle/, ingest + enrich only (no RIR)
+# All CSVs in data/kaggle/data/, ingest + enrich only (no RIR)
 python manage.py build --skip-rir
 
 # Ingest only
@@ -73,7 +73,7 @@ python manage.py ingest [OPTIONS]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--csv PATH` | all CSVs in `data/kaggle/` | Kaggle CSV path (repeatable) |
+| `--csv PATH` | all CSVs in `data/kaggle/data/` | Kaggle CSV path (repeatable) |
 
 ```bash
 # Single CSV
@@ -89,6 +89,24 @@ python manage.py ingest
 ```
 
 > Tracks already processed for the active embedding method are skipped (`embedded_methods` field in `metadata.parquet`). Restarting after a crash resumes exactly where it left off.
+
+---
+
+### `download-kaggle-csvs` — Download the Kaggle CSV files only
+
+Downloads the Kaggle CSV files used by the project into the configured directory `data/kaggle/data/`. This is useful when you want the CSVs in place before running `build` or `ingest`.
+
+```bash
+python manage.py download-kaggle-csvs
+```
+
+Expected files:
+
+```text
+data/kaggle/data/spotify-streaming-top-50-world.csv
+data/kaggle/data/spotify-streaming-top-50-france.csv
+data/kaggle/data/spotify-streaming-top-50-usa.csv
+```
 
 ---
 
@@ -644,6 +662,9 @@ python manage.py webapp --prod --port 9000
 
 ```bash
 source venv/bin/activate
+
+# Download the Kaggle CSVs into data/kaggle/data/
+python manage.py download-kaggle-csvs
 
 # One command does everything: ingest → augment → enrich
 python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv

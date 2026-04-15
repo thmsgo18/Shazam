@@ -1,1 +1,1 @@
-# src/ingestion — pipeline d'ingestion et d'augmentation des données
+# src/ingestion — data ingestion and augmentation pipeline

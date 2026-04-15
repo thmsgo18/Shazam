@@ -1,1 +1,1 @@
-# src/maintenance — vérification, nettoyage et enrichissement des données
+# src/maintenance — data validation, cleanup, and enrichment

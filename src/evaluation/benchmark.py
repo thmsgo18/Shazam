@@ -181,35 +181,35 @@ def build_test_suite(audio_path: str, full: bool = False) -> list[dict]:
     if os.path.exists(audio_path):
         tests.append({"label": "CLEAN  | original", "path": audio_path, "type": "real"})
     else:
-        print(f"{RED}  [ERREUR] Fichier introuvable : {audio_path}{RESET}")
+        print(f"{RED}  [ERROR] File not found: {audio_path}{RESET}")
         return tests
 
     # Loading for generating simulated degradations
     try:
         waveform, sr = librosa.load(audio_path, sr=base_sr, mono=True)
     except Exception as e:
-        print(f"{RED}  [ERREUR] Impossible de charger l'audio : {e}{RESET}")
+        print(f"{RED}  [ERROR] Unable to load audio: {e}{RESET}")
         return tests
 
     np.random.seed(42)
 
     if full:
         sim_cases = [
-            ("SIM    | bruit SNR 20dB",    add_noise_at_snr(waveform, 20)),
-            ("SIM    | bruit SNR 10dB",    add_noise_at_snr(waveform, 10)),
-            ("SIM    | bruit SNR  5dB",    add_noise_at_snr(waveform,  5)),
-            ("SIM    | reverb léger",       add_reverb(waveform, sr, decay=0.3)),
-            ("SIM    | reverb fort",        add_reverb(waveform, sr, decay=0.6)),
-            ("SIM    | reverb+bruit 20dB",  add_reverb(add_noise_at_snr(waveform, 20), sr)),
-            ("SIM    | reverb+bruit 10dB",  add_reverb(add_noise_at_snr(waveform, 10), sr)),
+            ("SIM    | noise SNR 20dB",    add_noise_at_snr(waveform, 20)),
+            ("SIM    | noise SNR 10dB",    add_noise_at_snr(waveform, 10)),
+            ("SIM    | noise SNR  5dB",    add_noise_at_snr(waveform,  5)),
+            ("SIM    | light reverb",      add_reverb(waveform, sr, decay=0.3)),
+            ("SIM    | heavy reverb",      add_reverb(waveform, sr, decay=0.6)),
+            ("SIM    | reverb+noise 20dB", add_reverb(add_noise_at_snr(waveform, 20), sr)),
+            ("SIM    | reverb+noise 10dB", add_reverb(add_noise_at_snr(waveform, 10), sr)),
             ("SIM    | bandpass 300-7kHz",  apply_bandpass(waveform, sr, 300, 7000)),
             ("SIM    | combo 15dB+rev+bp",  apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
             ("SIM    | codec Opus 32kbps",  simulate_opus_codec(waveform, sr, 32000)),
         ]
     else:
         sim_cases = [
-            ("SIM    | bruit SNR 20dB",   add_noise_at_snr(waveform, 20)),
-            ("SIM    | reverb léger",      add_reverb(waveform, sr, decay=0.3)),
+            ("SIM    | noise SNR 20dB",   add_noise_at_snr(waveform, 20)),
+            ("SIM    | light reverb",     add_reverb(waveform, sr, decay=0.3)),
             ("SIM    | combo 15dB+rev+bp", apply_bandpass(add_reverb(add_noise_at_snr(waveform, 15), sr), sr)),
         ]
 
@@ -301,7 +301,7 @@ def rank_color(rank):
 def print_result_row(label: str, res: dict, width: int = 42):
     label_str = label[:width].ljust(width)
     if not res["success"]:
-        print(f"  {label_str}  {RED}ERREUR : {res['error']}{RESET}")
+        print(f"  {label_str}  {RED}ERROR: {res['error']}{RESET}")
         return
     rank     = res["rank"]
     r_col    = rank_color(rank) if rank else RED
@@ -405,13 +405,13 @@ def run_benchmark(
         if real_tests:
             ranks = [v["rank"] for v in real_tests.values() if v.get("rank")]
             if ranks:
-                print(f"  Fichiers réels  — Rank moyen : {np.mean(ranks):.1f}")
+                print(f"  Real files     — Average rank: {np.mean(ranks):.1f}")
         if sim_tests:
             ranks = [v["rank"] for v in sim_tests.values() if v.get("rank")]
             if ranks:
-                print(f"  Simulations     — Rank moyen : {np.mean(ranks):.1f}")
+                print(f"  Simulations    — Average rank: {np.mean(ranks):.1f}")
     else:
-        print(f"  {total} cas exécutés (pas de target connu — Top-1 non calculé)")
+        print(f"  {total} case(s) executed (unknown target — Top-1 not computed)")
 
     out = {
         "run_label": label_run,

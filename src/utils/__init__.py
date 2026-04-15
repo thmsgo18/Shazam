@@ -1,1 +1,1 @@
-# src/utils — utilitaires partagés entre les scripts
+# src/utils — shared helpers across scripts

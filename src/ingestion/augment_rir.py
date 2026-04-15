@@ -315,7 +315,7 @@ def _backfill_rir_done(
     try:
         atomic_write_parquet(meta_path, df)
     except Exception as exc:
-        console.print(f"[red]Erreur écriture metadata : {exc}[/red]")
+        console.print(f"[red]Error writing metadata: {exc}[/red]")
 
     console.print(f"[green]✓ metadata.parquet updated ({updated} tracks)[/green]\n")
     return {tid: list(rirs) for tid, rirs in rir_map.items()}
@@ -463,21 +463,21 @@ def run_augment(
         return
 
     def _on_interrupt(sig, frame):
-        console.print("\n[yellow]⚠ Interruption détectée — arrêt propre en cours...[/yellow]")
+        console.print("\n[yellow]⚠ Interrupt detected — graceful shutdown in progress...[/yellow]")
         _stop_requested.set()
 
     signal.signal(signal.SIGINT,  _on_interrupt)
     signal.signal(signal.SIGTERM, _on_interrupt)
 
-    console.print("[yellow]Chargement des RIRs...[/yellow]")
+    console.print("[yellow]Loading RIRs...[/yellow]")
     rirs = _load_rirs(rir_path, n_rir, sr=22050, source=source)
     if not rirs:
-        console.print("[red]Aucune RIR disponible. Abandon.[/red]")
+        console.print("[red]No RIR available. Aborting.[/red]")
         return
 
     t_rir = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
     t_rir.add_column("RIR", width=38)
-    t_rir.add_column("Durée", justify="right", width=12)
+    t_rir.add_column("Duration", justify="right", width=12)
     for name, rir in rirs:
         t_rir.add_row(name, f"{len(rir) / 22050 * 1000:.0f} ms")
     console.print(t_rir)
@@ -495,7 +495,7 @@ def run_augment(
         df_all = df_meta[df_meta["track_id"] == tracks]
 
     if df_all.empty:
-        console.print(f"[red]Aucun track trouvé pour '{tracks}'.[/red]")
+        console.print(f"[red]No track found for '{tracks}'.[/red]")
         return
 
     # Automatic backfill if tracking is missing
@@ -525,20 +525,20 @@ def run_augment(
     n_already_done = len(df_all) - len(df_targets)
     if n_already_done:
         console.print(
-            f"[dim]{n_already_done} track(s) ignorés[/dim] "
-            f"[dim](toutes les {len(rirs)} RIRs déjà appliquées)[/dim]"
+            f"[dim]{n_already_done} track(s) skipped[/dim] "
+            f"[dim](all {len(rirs)} RIRs already applied)[/dim]"
         )
 
     if df_targets.empty:
-        console.print("[green]✓ Tout est déjà augmenté — rien à faire.[/green]")
+        console.print("[green]✓ Everything is already augmented — nothing to do.[/green]")
         return
 
     total     = len(df_targets)
     meta_lock = threading.Lock()
 
-    console.print(f"\n[bold]{total} track(s) à augmenter[/bold] × {len(rirs)} RIRs\n")
+    console.print(f"\n[bold]{total} track(s) to augment[/bold] × {len(rirs)} RIRs\n")
 
-    # ── Étage 1 : téléchargements ─────────────────────────────────────────────
+    # ── Stage 1: downloads ───────────────────────────────────────────────────
     work_q: queue.Queue = queue.Queue()
     dl_q:   queue.Queue = queue.Queue(maxsize=workers * 2)
 
@@ -573,7 +573,7 @@ def run_augment(
 
     threading.Thread(target=_sentinel_watcher, daemon=True).start()
 
-    # ── Étage 2 : convolution RIR ─────────────────────────────────────────────
+    # ── Stage 2: RIR convolution ─────────────────────────────────────────────
     conv_q: queue.Queue = queue.Queue(maxsize=2)
 
     def _convolve_worker():
@@ -629,7 +629,7 @@ def run_augment(
     conv_thread = threading.Thread(target=_convolve_worker, daemon=True)
     conv_thread.start()
 
-    # ── Étage 3 : embedding GPU + sauvegarde ChromaDB ────────────────────────
+    # ── Stage 3: GPU embedding + ChromaDB persistence ───────────────────────
     n_added = n_skipped = n_failed = done = 0
 
     with Progress(
@@ -659,14 +659,14 @@ def run_augment(
             progress.update(task_tracks, description=f"[bold cyan]{label}[/bold cyan]")
 
             if degraded is None:
-                progress.update(task_detail, description="[red]✗ Échec[/red]", visible=True)
+                progress.update(task_detail, description="[red]✗ Failed[/red]", visible=True)
                 n_failed += 1
                 done     += 1
                 progress.update(task_tracks, completed=done)
                 continue
 
             if degraded == []:
-                progress.update(task_detail, description="[dim]déjà augmenté[/dim]", visible=True)
+                progress.update(task_detail, description="[dim]already augmented[/dim]", visible=True)
                 n_skipped += 1
                 done      += 1
                 progress.update(task_tracks, completed=done)
@@ -719,17 +719,17 @@ def run_augment(
 
     interrupted = _stop_requested.is_set()
     console.print(Panel(
-        f"[bold]Segments ajoutés :[/bold] [green]{n_added}[/green]\n"
-        f"[bold]Tracks ignorés   :[/bold] [dim]{n_skipped}[/dim]\n"
-        f"[bold]Tracks échoués   :[/bold] [yellow]{n_failed}[/yellow]\n"
+        f"[bold]Segments added:[/bold] [green]{n_added}[/green]\n"
+        f"[bold]Tracks skipped:[/bold] [dim]{n_skipped}[/dim]\n"
+        f"[bold]Tracks failed:[/bold] [yellow]{n_failed}[/yellow]\n"
         f"[bold]Total ChromaDB   :[/bold] [cyan]{collection.count()}[/cyan] segments"
-        + ("\n[yellow]⚠ Arrêt anticipé — reprends avec la même commande[/yellow]" if interrupted else ""),
-        title="[bold green]Augmentation terminée[/bold green]" if not interrupted
-              else "[bold yellow]Augmentation interrompue[/bold yellow]",
+        + ("\n[yellow]⚠ Stopped early — rerun with the same command[/yellow]" if interrupted else ""),
+        title="[bold green]Augmentation completed[/bold green]" if not interrupted
+              else "[bold yellow]Augmentation interrupted[/bold yellow]",
         expand=False,
     ))
 
     if rebuild_index and n_added > 0:
         _rebuild_index(collection_key, chroma_client)
     elif n_added == 0:
-        console.print("[dim]Aucun segment ajouté — index FAISS non modifié.[/dim]")
+        console.print("[dim]No segments added — FAISS index left unchanged.[/dim]")

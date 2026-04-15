@@ -467,9 +467,9 @@ def _build_topk_summary_rows(rows: list[dict]) -> list[dict]:
         "5s": "5 s",
         "15s": "15 s",
         "30s": "30 s",
-        "Extrait (fichier)": "File excerpt",
-        "Micro (musique seule)": "Microphone (music only)",
-        "Micro + voix": "Microphone + speech",
+        "File excerpt": "File excerpt",
+        "Microphone (music only)": "Microphone (music only)",
+        "Microphone + speech": "Microphone + speech",
     }
 
     def add_group(category: str, subcategory: str, subset: list[dict]) -> None:
@@ -508,9 +508,9 @@ def _build_topk_summary_rows(rows: list[dict]) -> list[dict]:
             )
 
     overview_map = {
-        "Extrait (fichier)": [r for r in rows if r.get("query_kind") == "studio"],
-        "Micro (musique seule)": [r for r in mic_rows if r.get("speech") == "clean"],
-        "Micro + voix": [r for r in mic_rows if r.get("speech") == "speech"],
+        "File excerpt": [r for r in rows if r.get("query_kind") == "studio"],
+        "Microphone (music only)": [r for r in mic_rows if r.get("speech") == "clean"],
+        "Microphone + speech": [r for r in mic_rows if r.get("speech") == "speech"],
     }
     for label, subset in overview_map.items():
         add_group("pipeline_overview", label, subset)

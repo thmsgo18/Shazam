@@ -69,8 +69,8 @@ ALL_CONDITIONS = ["clean", "snr_20", "snr_10", "reverb", "combo"]
 
 CONDITION_LABELS = {
     "clean":  "Clean",
-    "snr_20": "Bruit SNR 20 dB",
-    "snr_10": "Bruit SNR 10 dB",
+    "snr_20": "Noise SNR 20 dB",
+    "snr_10": "Noise SNR 10 dB",
     "reverb": "Reverb",
     "combo":  "Combo (15 dB+Rev+BP)",
 }
@@ -396,7 +396,7 @@ def run_evaluate(
     out_dir = Path(out_dir) if out_dir else RESULTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Chargement du manifest ──
+    # ── Manifest loading ──
     manifest = load_manifest()
     if not manifest:
         print(
@@ -438,7 +438,7 @@ def run_evaluate(
                 res = _evaluate_one(audio_path, track_id, method, condition)
 
                 if res["error"]:
-                    rank_str = f"ERREUR ({res['error']})"
+                    rank_str = f"ERROR ({res['error']})"
                 elif res["rank"] is None:
                     rank_str = "NF"
                 else:

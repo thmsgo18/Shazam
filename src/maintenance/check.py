@@ -161,7 +161,7 @@ class Warning:
 
 
 # ---------------------------------------------------------------------------
-# check_method — checks complets (pour --details et --purge)
+# check_method — full checks (for --details and --purge)
 # ---------------------------------------------------------------------------
 
 def check_method(method: str) -> list[Warning]:
@@ -897,7 +897,7 @@ def _render_metadata_report() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Rendu d'un warning (pour --details)
+# Warning rendering (for --details)
 # ---------------------------------------------------------------------------
 
 def _render_warning(w: Warning) -> None:
@@ -932,7 +932,7 @@ def _render_warning(w: Warning) -> None:
             first = False
 
     title   = f"[bold {color}]{icon} {w.level} · {w.code} · {w.label}[/bold {color}]  [dim cyan]({w.method})[/dim cyan]"
-    content = "\n".join(lines) if lines else "  (pas de détails)"
+    content = "\n".join(lines) if lines else "  (no details)"
 
     console.print(Panel(
         content,
@@ -1052,7 +1052,7 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
                 collection.delete(ids=result["ids"])
                 stats["segments_removed"] += len(result["ids"])
 
-    # --- FAISS index + order parquet (obsolètes) ---
+    # --- FAISS index + order parquet (obsolete) ---
     for p in [index_path, order_path]:
         if p.exists():
             p.unlink()
@@ -1149,7 +1149,7 @@ def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
     total_tracks = sum(len(v) for v in by_method.values())
     console.print("")
     console.print(
-        f"[bold]{total_tracks} track(s)[/bold] vont être purgés pour la méthode concernée."
+        f"[bold]{total_tracks} track(s)[/bold] will be purged for the selected method."
     )
     console.print("[dim]• ChromaDB segments removed for the purged method only.[/dim]")
     console.print("[dim]• If the track has no more active methods → metadata and fingerprint rows will be deleted.[/dim]")
@@ -1268,7 +1268,7 @@ def run_check(
     if details or purge or purge_missing_fp:
         if not methods:
             console.print(
-                f"[yellow]Aucune collection ChromaDB trouvée dans {config.CHROMA_DIR}[/yellow]"
+                f"[yellow]No ChromaDB collection found in {config.CHROMA_DIR}[/yellow]"
             )
             sys.exit(0)
 

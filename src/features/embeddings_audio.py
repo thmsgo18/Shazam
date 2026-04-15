@@ -87,7 +87,7 @@ def _load_clap(model_name: str, device: str | None = None, local_files_only: boo
 
     import src.config as config
     processor = ClapProcessor.from_pretrained(model_name, local_files_only=local_files_only)       # Load the CLAP processor.
-    # Float16 uniquement sur CUDA — sur CPU/MPS beaucoup d'opérations ne supportent pas Half
+    # Float16 only on CUDA — many CPU/MPS operations do not support Half
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
     model = ClapModel.from_pretrained(
         model_name,
@@ -213,7 +213,7 @@ def _load_muq(model_name: str, device: str | None = None, local_files_only: bool
             device = "cpu"  # MPS does not support ComplexFloat (required by MuQ)
 
     import src.config as config
-    # Float16 uniquement sur CUDA — sur CPU LayerNorm ne supporte pas Half
+    # Float16 only on CUDA — LayerNorm on CPU does not support Half
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
     try:
         model = MuQ.from_pretrained(model_name, local_files_only=local_files_only).to(dtype).to(device)
@@ -237,7 +237,7 @@ def muq_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int
     """
     import torch
 
-    # Handle empty input (dim 1024 fixe pour MuQ-large)
+    # Handle empty input (fixed 1024-dim output for MuQ-large)
     if waveform is None or len(waveform) == 0:
         return np.zeros((1024,), dtype=np.float32)
 

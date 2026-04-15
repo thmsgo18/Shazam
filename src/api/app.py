@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message=".*upsample_bicubic2d.*", category=Use
 
 try:
     import click
-except ModuleNotFoundError:  # pragma: no cover - dépendance CLI optionnelle
+except ModuleNotFoundError:  # pragma: no cover - optional CLI dependency
     click = None
 
 ROOT          = Path(__file__).resolve().parents[2]

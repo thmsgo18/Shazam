@@ -9,6 +9,7 @@ Available commands:
     ── Build ──────────────────────────────────────────────────────────────────
     build                  Full pipeline: ingest → augment → enrich
     ingest                 Download and ingest tracks from Kaggle CSV files
+    download-kaggle-csvs   Download only the Kaggle CSV files into data/kaggle/data
     augment                Augment embeddings with RIRs
     enrich                 Enrich metadata.parquet via Deezer + MusicBrainz
 
@@ -68,7 +69,7 @@ def cli():
 
 @cli.command()
 @click.option("--csv", "csv_paths", multiple=True,
-              help="Path(s) to Kaggle CSV files (repeatable). Default: data/kaggle/")
+              help="Path(s) to Kaggle CSV files (repeatable). Default: data/kaggle/data/")
 @click.option("--skip-rir", is_flag=True, default=False,
               help="Skip the RIR augmentation step after ingestion")
 @click.option("--skip-enrich", is_flag=True, default=False,
@@ -83,7 +84,7 @@ def build(csv_paths: tuple[str, ...], skip_rir: bool, skip_enrich: bool) -> None
     Examples:
       python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv
       python manage.py build --csv data/kaggle/data/spotify-streaming-top-50-world.csv --skip-rir
-      python manage.py build  # all CSVs in data/kaggle/
+      python manage.py build  # all CSVs in data/kaggle/data/
     """
     from src.ingestion.ingest import run_ingest
 
@@ -111,7 +112,7 @@ def build(csv_paths: tuple[str, ...], skip_rir: bool, skip_enrich: bool) -> None
 
 @cli.command()
 @click.option("--csv", "csv_paths", multiple=True,
-              help="Path(s) to Kaggle CSV files (repeatable). Default: data/kaggle/")
+              help="Path(s) to Kaggle CSV files (repeatable). Default: data/kaggle/data/")
 def ingest(csv_paths: tuple[str, ...]) -> None:
     """Download and ingest tracks from Kaggle CSV files.
 
@@ -121,6 +122,13 @@ def ingest(csv_paths: tuple[str, ...]) -> None:
     """
     from src.ingestion.ingest import run_ingest
     run_ingest(list(csv_paths) if csv_paths else None)
+
+
+@cli.command("download-kaggle-csvs")
+def download_kaggle_csvs_cmd() -> None:
+    """Download only the Kaggle CSV files to the project's configured data directory."""
+    from src.ingestion.ingest import download_kaggle_csvs
+    download_kaggle_csvs()
 
 
 @cli.command()

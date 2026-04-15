@@ -311,6 +311,21 @@ Les données musicales proviennent des classements Spotify via Kaggle. Le pipeli
 
 Les CSV Kaggle `spotify-streaming-top-50-*.csv` sont directement compatibles. Placer les fichiers dans `data/kaggle/data/`.
 
+Pour télécharger les CSV Kaggle dans le dossier configuré par le projet (`data/kaggle/data/`), lancer depuis la racine du dépôt après activation de l'environnement virtuel :
+
+```bash
+source venv/bin/activate
+python manage.py download-kaggle-csvs
+```
+
+Cette commande utilise le même chemin que le code d'ingestion et recrée localement la structure attendue :
+
+```text
+data/kaggle/data/spotify-streaming-top-50-world.csv
+data/kaggle/data/spotify-streaming-top-50-france.csv
+data/kaggle/data/spotify-streaming-top-50-usa.csv
+```
+
 **Dataset utilisé :** [Spotify Streaming Top 50 — Kaggle](https://www.kaggle.com/datasets/anxods/spotify-top-50-playlist-songs-anxods) — classements quotidiens Top 50 mondial et par pays.
 
 **Déduplication automatique :** un même morceau présent dans plusieurs CSV (hits mondiaux présents dans le top France, top US et top Monde) n'est traité qu'une fois, identifié par son `track_id` (hash MD5 de `artiste_titre`).

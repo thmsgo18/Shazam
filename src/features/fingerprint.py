@@ -125,7 +125,7 @@ def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> fl
     if not offsets:
         return 0.0
 
-    # Score = nombre de matches au meilleur offset / taille de la requête
+    # Score = number of matches at the best offset / query size
     return max(offsets.values()) / len(fp_query)
 
 
