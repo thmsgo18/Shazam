@@ -34,6 +34,7 @@ L'approche combine la puissance des embeddings de deep learning (recherche vecto
   - [Méthodes d'embedding](#méthodes-dembedding)
   - [Prérequis](#prérequis)
   - [Installation](#installation)
+  - [Tests](#tests)
   - [Données](#données)
   - [Démarrage rapide](#démarrage-rapide)
   - [Commandes essentielles](#commandes-essentielles)
@@ -215,7 +216,9 @@ Chaque track mémorise les méthodes déjà calculées dans le champ `embedded_m
 
 ## Prérequis
 
-- **Python 3.10** (les dépendances ne sont pas toutes compatibles 3.11+)
+- **Python 3.10 (64 bits)** requis
+- **Testé avec Python 3.10.9**
+- **Python 3.11+ n'est pas supporté** pour le moment : certaines dépendances cassent avec les versions plus récentes
 - **Node.js 18+** (pour le frontend React)
 - **ffmpeg** installé et accessible dans le PATH
 - **yt-dlp** (installé via `requirements.txt`)
@@ -230,9 +233,10 @@ Chaque track mémorise les méthodes déjà calculées dans le champ `embedded_m
 git clone <url>
 cd Projet
 
-# 2. Créer et activer l'environnement virtuel
-python3 -m venv venv
+# 2. Créer et activer un environnement virtuel Python 3.10 (64 bits)
+python3.10 -m venv venv
 source venv/bin/activate          # macOS / Linux
+# py -3.10-64 -m venv venv        # Windows
 # venv\Scripts\activate           # Windows
 
 # 3. Installer les dépendances Python
@@ -241,6 +245,21 @@ pip install -r requirements.txt
 # 4. Installer les dépendances frontend
 cd webapp/frontend && npm install && cd ../..
 ```
+
+---
+
+## Tests
+
+La suite de tests Python/backend est regroupée dans [`tests/`](tests/README.md) et se lance via `manage.py`.
+
+```bash
+python manage.py test
+python manage.py test --buffer
+python manage.py test --unit
+python manage.py test --integration --failfast
+```
+
+Le détail de l'arborescence, des conventions et de la couverture actuelle est documenté dans [`tests/README.md`](tests/README.md).
 
 ---
 

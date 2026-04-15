@@ -20,6 +20,7 @@ Available commands:
     ── Usage ──────────────────────────────────────────────────────────────────
     config                 Show the active configuration (src/config.py)
     identify               Identify an audio file
+    test                   Run the automated test suite
     download-test          Download a test audio clip from YouTube
 
     ── Evaluation ─────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import os
 import sys
+import unittest
 import warnings
 from pathlib import Path
 
@@ -363,6 +365,75 @@ def identify(audio: str, top: int, detailed: bool, target_track_id: str | None) 
     else:
         from src.api.app import run_identify_cli
         run_identify_cli(audio, method=None, top=top, detailed=detailed)
+
+
+@cli.command()
+@click.option("--path", "paths", multiple=True,
+              help="Discovery path(s), relative to the project root. Default: tests/")
+@click.option("--pattern", default="test*.py", show_default=True,
+              help="Filename pattern used by unittest discovery")
+@click.option("--unit", "only_unit", is_flag=True, default=False,
+              help="Run only unit tests (tests/unit)")
+@click.option("--integration", "only_integration", is_flag=True, default=False,
+              help="Run only integration tests (tests/integration)")
+@click.option("--failfast", is_flag=True, default=False,
+              help="Stop on the first failing test")
+@click.option("--buffer", is_flag=True, default=False,
+              help="Capture stdout/stderr for passing tests to reduce noise")
+@click.option("--quiet", is_flag=True, default=False,
+              help="Lower verbosity (useful when the suite is already green)")
+def test(
+    paths: tuple[str, ...],
+    pattern: str,
+    only_unit: bool,
+    only_integration: bool,
+    failfast: bool,
+    buffer: bool,
+    quiet: bool,
+) -> None:
+    """Run the automated test suite with unittest discovery.
+
+    \b
+    Examples:
+      python manage.py test
+      python manage.py test --buffer
+      python manage.py test --unit
+      python manage.py test --integration --failfast
+      python manage.py test --path tests/unit/utils --pattern 'test_youtube*.py'
+    """
+    selected_paths: list[Path]
+    if paths:
+        selected_paths = [(ROOT / rel_path).resolve() for rel_path in paths]
+    elif only_unit and not only_integration:
+        selected_paths = [ROOT / "tests" / "unit"]
+    elif only_integration and not only_unit:
+        selected_paths = [ROOT / "tests" / "integration"]
+    else:
+        selected_paths = [ROOT / "tests"]
+
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite()
+
+    for selected_path in selected_paths:
+        if not selected_path.exists():
+            click.echo(f"Test path not found: {selected_path}", err=True)
+            sys.exit(1)
+        suite.addTests(
+            loader.discover(
+                start_dir=str(selected_path),
+                pattern=pattern,
+                top_level_dir=str(ROOT),
+            )
+        )
+
+    runner = unittest.TextTestRunner(
+        verbosity=1 if quiet else 2,
+        failfast=failfast,
+        buffer=buffer,
+    )
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        sys.exit(1)
 
 
 _POSITIONS = ["start", "first-quarter", "middle", "third-quarter", "end"]

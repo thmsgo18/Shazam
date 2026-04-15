@@ -32,6 +32,7 @@ The approach combines the power of deep learning embeddings (FAISS vector search
 - [Embedding Methods](#embedding-methods)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Tests](#tests)
 - [Data](#data)
 - [Quick Start](#quick-start)
 - [Essential Commands](#essential-commands)
@@ -200,7 +201,9 @@ Each track stores already-computed methods in the `embedded_methods` field of `m
 
 ## Requirements
 
-- **Python 3.10** (some dependencies are not compatible with 3.11+)
+- **Python 3.10 (64-bit)** required
+- **Tested with Python 3.10.9**
+- **Python 3.11+ is not supported** for now: some dependencies break on newer versions
 - **Node.js 18+** (for the React frontend)
 - **ffmpeg** installed and available in PATH
 - **yt-dlp** (installed via `requirements.txt`)
@@ -215,9 +218,10 @@ Each track stores already-computed methods in the `embedded_methods` field of `m
 git clone <url>
 cd Projet
 
-# 2. Create and activate the virtual environment
-python3 -m venv venv
+# 2. Create and activate a Python 3.10 (64-bit) virtual environment
+python3.10 -m venv venv
 source venv/bin/activate          # macOS / Linux
+# py -3.10-64 -m venv venv        # Windows
 # venv\Scripts\activate           # Windows
 
 # 3. Install Python dependencies
@@ -228,6 +232,21 @@ cd webapp/frontend && npm install && cd ../..
 ```
 
 > For the web interface, install the root `requirements.txt`: the backend imports the full identification pipeline from `src/`, so `webapp/backend/requirements.txt` alone is not sufficient for `/api/identify`.
+
+---
+
+## Tests
+
+The Python/backend test suite is organized under [`tests/`](tests/README.md) and can be run through `manage.py`.
+
+```bash
+python manage.py test
+python manage.py test --buffer
+python manage.py test --unit
+python manage.py test --integration --failfast
+```
+
+Use [`tests/README.md`](tests/README.md) for the layout, conventions, and current coverage notes.
 
 ---
 

@@ -21,6 +21,7 @@ python manage.py <command> --help
 |-------|----------|
 | [Construction](#construction) | `build` · `ingest` · `augment` · `enrich` |
 | [Maintenance](#maintenance) | `check` · `rebuild` · `clean` |
+| [Tests](#tests) | `test` |
 | [Usage](#usage) | `config` · `identify` · `download-test` |
 | [Evaluation](#evaluation) | `eval` · `eval base` · `eval studio-mic` · `eval duration` · `eval stage12` · `eval rir` · `eval mic-conditions` |
 | [Web interface](#web-interface) | `webapp` |
@@ -266,6 +267,47 @@ python manage.py clean --all --yes
 ```
 
 > After `clean --track`, run `python manage.py rebuild --what index` to update the FAISS index.
+
+---
+
+## Tests
+
+### `test` — Run the automated test suite
+
+Runs the Python/backend `unittest` suite located under `tests/`. This is the recommended entry point for local validation.
+
+```bash
+python manage.py test [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--path PATH` | `tests` | Restrict discovery to one test directory |
+| `--pattern GLOB` | `test*.py` | Restrict discovery to matching files |
+| `--unit` | `False` | Run only `tests/unit` |
+| `--integration` | `False` | Run only `tests/integration` |
+| `--failfast` | `False` | Stop at the first failing test |
+| `--buffer` | `False` | Hide stdout/stderr for passing tests |
+| `--quiet` | `False` | Lower verbosity |
+
+```bash
+# Full suite
+python manage.py test
+
+# Cleaner output
+python manage.py test --buffer
+
+# Unit tests only
+python manage.py test --unit
+
+# Integration tests only, stop on first failure
+python manage.py test --integration --failfast
+
+# Narrow to one folder
+python manage.py test --path tests/unit/utils
+```
+
+> The current suite covers the Python/backend project. Frontend React tests are not part of this command yet.
 
 ---
 
