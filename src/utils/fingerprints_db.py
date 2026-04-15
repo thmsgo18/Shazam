@@ -1,10 +1,10 @@
 """
 src/utils/fingerprints_db.py
 
-Gestion de la base SQLite des fingerprints audio.
-Partagé entre l'ingestion, la reconstruction des fingerprints et le checker.
+Management of the SQLite database for audio fingerprints.
+Shared between ingestion, fingerprint reconstruction, and the checker.
 
-Schéma :
+Schema:
     fingerprints(track_id TEXT PRIMARY KEY, hashes BLOB NOT NULL, n_hashes INTEGER NOT NULL)
 """
 
@@ -17,20 +17,20 @@ import threading
 import time
 from pathlib import Path
 
-# Verrou global pour les écritures concurrentes (ThreadPoolExecutor)
+# Global lock for concurrent writes (ThreadPoolExecutor)
 _db_lock = threading.Lock()
 
-# Timeout SQLite (secondes) — délai d'attente si la DB est verrouillée par une autre connexion
+# SQLite timeout (seconds) — wait time if the DB is locked by another connection
 _SQLITE_TIMEOUT = 30
 
 
 @contextlib.contextmanager
 def _connect(db_path: Path, timeout: float = _SQLITE_TIMEOUT):
     """
-    Context manager qui ouvre une connexion SQLite, commit ou rollback,
-    et ferme explicitement la connexion à la sortie.
+    Context manager that opens an SQLite connection, commits or rollbacks,
+    and explicitly closes the connection on exit.
 
-    Garantit qu'aucun verrou n'est laissé actif après le bloc.
+    Ensures no lock is left active after the block.
     """
     conn = sqlite3.connect(str(db_path), timeout=timeout)
     try:
@@ -44,16 +44,16 @@ def _connect(db_path: Path, timeout: float = _SQLITE_TIMEOUT):
 
 
 # ---------------------------------------------------------------------------
-# Initialisation
+# Initialization
 # ---------------------------------------------------------------------------
 
 def fp_init(db_path: Path) -> None:
-    """Crée la table fingerprints si elle n'existe pas encore, active le mode WAL."""
+    """Creates the fingerprints table if it doesn't exist yet, enables WAL mode."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
-        # WAL = Write-Ahead Logging : meilleure gestion de la concurrence,
-        # les lecteurs ne bloquent pas les écrivains et vice-versa.
+        # WAL = Write-Ahead Logging: better concurrency management,
+        # readers don't block writers and vice versa.
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS fingerprints (
@@ -65,11 +65,11 @@ def fp_init(db_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lecture
+# Reading
 # ---------------------------------------------------------------------------
 
 def fp_load_ids(db_path: Path) -> set[str]:
-    """Retourne l'ensemble des track_ids qui ont déjà un fingerprint (n_hashes > 0)."""
+    """Returns the set of track_ids that already have a fingerprint (n_hashes > 0)."""
     db_path = Path(db_path)
     if not db_path.exists():
         return set()
@@ -81,7 +81,7 @@ def fp_load_ids(db_path: Path) -> set[str]:
 
 
 def fp_load_all(db_path: Path) -> dict[str, set]:
-    """Charge tous les fingerprints → {track_id: set_of_hashes}. Peut être lent sur grande base."""
+    """Loads all fingerprints → {track_id: set_of_hashes}. Can be slow on a large database."""
     db_path = Path(db_path)
     if not db_path.exists():
         return {}
@@ -91,7 +91,7 @@ def fp_load_all(db_path: Path) -> dict[str, set]:
 
 
 def fp_load_stats(db_path: Path) -> dict[str, int]:
-    """Charge {track_id: n_hashes} sans désérialiser les blobs (lecture rapide)."""
+    """Loads {track_id: n_hashes} without deserializing the blobs (fast read)."""
     db_path = Path(db_path)
     if not db_path.exists():
         return {}
@@ -104,12 +104,12 @@ def fp_load_stats(db_path: Path) -> dict[str, int]:
 
 def fp_detect_format(db_path: Path) -> str:
     """
-    Détecte le format des fingerprints en désérialisant un seul blob.
+    Detects the fingerprint format by deserializing a single blob.
 
-    Retourne :
-        'v1' — hashes 3-tuples (sans ancre temporelle)
-        'v2' — hashes 4-tuples (avec ancre temporelle t1)
-        'unknown' — base vide ou erreur
+    Returns:
+        'v1' — 3-tuple hashes (without temporal anchor)
+        'v2' — 4-tuple hashes (with temporal anchor t1)
+        'unknown' — empty database or error
     """
     db_path = Path(db_path)
     if not db_path.exists():
@@ -129,23 +129,23 @@ def fp_detect_format(db_path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Écriture
+# Writing
 # ---------------------------------------------------------------------------
 
 def fp_save(db_path: Path, track_id: str, hashes: set, thread_safe: bool = False) -> None:
     """
-    Insère ou remplace le fingerprint d'un track.
+    Inserts or replaces the fingerprint of a track.
 
     Args:
-        db_path:      chemin vers fingerprints.db.
-        track_id:     identifiant du track.
-        hashes:       set de hashes (3-tuples v1 ou 4-tuples v2).
-        thread_safe:  si True, utilise le verrou global (ThreadPoolExecutor).
+        db_path:      path to fingerprints.db.
+        track_id:     track identifier.
+        hashes:       set of hashes (v1 3-tuples or v2 4-tuples).
+        thread_safe:  if True, uses the global lock (ThreadPoolExecutor).
     """
     db_path = Path(db_path)
 
     def _write(retries: int = 5, delay: float = 1.0):
-        """Écrit dans la DB avec retry automatique si database is locked."""
+        """Writes to the DB with automatic retry if database is locked."""
         for attempt in range(retries):
             try:
                 with _connect(db_path) as conn:
@@ -153,10 +153,10 @@ def fp_save(db_path: Path, track_id: str, hashes: set, thread_safe: bool = False
                         "INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?)",
                         (track_id, pickle.dumps(hashes), len(hashes)),
                     )
-                return  # succès
+                return  # success
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() and attempt < retries - 1:
-                    time.sleep(delay * (attempt + 1))  # backoff progressif
+                    time.sleep(delay * (attempt + 1))  # progressive backoff
                 else:
                     raise
 
@@ -169,9 +169,9 @@ def fp_save(db_path: Path, track_id: str, hashes: set, thread_safe: bool = False
 
 def fp_delete(db_path: Path, track_ids: set[str]) -> int:
     """
-    Supprime les fingerprints d'un ensemble de tracks.
+    Deletes the fingerprints of a set of tracks.
 
-    Retourne le nombre de lignes supprimées.
+    Returns the number of deleted rows.
     """
     db_path = Path(db_path)
     if not db_path.exists() or not track_ids:
@@ -186,15 +186,15 @@ def fp_delete(db_path: Path, track_ids: set[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Migration depuis l'ancien format pickle
+# Migration from old pickle format
 # ---------------------------------------------------------------------------
 
 def fp_migrate_from_pkl(pkl_path: Path, db_path: Path) -> int:
     """
-    Migration one-shot : importe fingerprints.pkl dans fingerprints.db.
-    Appelée automatiquement au démarrage si le .pkl existe et le .db non.
+    One-shot migration: imports fingerprints.pkl into fingerprints.db.
+    Called automatically at startup if .pkl exists and .db does not.
 
-    Retourne le nombre de fingerprints migrés.
+    Returns the number of migrated fingerprints.
     """
     pkl_path = Path(pkl_path)
     db_path  = Path(db_path)

@@ -1,22 +1,22 @@
 """
 src/evaluation/plots.py
 
-Génération de graphiques pour le rapport à partir des résultats d'évaluation.
+Generation of graphs for the report from evaluation results.
 
-Graphiques disponibles :
+Available graphs:
 
-  ── Comparaison RIR (depuis rir_eval_*.json) ─────────────────────────────
-  G1  rir_paired_bar.png       Accuracy avec vs sans RIR par condition
-  G2  rir_delta.png            Gain Δ accuracy apporté par les RIR
-  G4  rir_faiss_scores.png     Score FAISS du bon morceau par track
+  ── RIR Comparison (from rir_eval_*.json) ─────────────────────────────
+  G1  rir_paired_bar.png       Accuracy with vs without RIR per condition
+  G2  rir_delta.png            Gain Δ accuracy brought by RIR
+  G4  rir_faiss_scores.png     FAISS score of the correct track per track
 
-  ── Évaluation pipeline (depuis eval_*.json) ─────────────────────────────
-  G6  method_accuracy.png      Accuracy par méthode × condition (avec écart-type)
-  G9  stage_comparison.png     Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint)
-  G11 duration_impact.png      Accuracy en fonction de la durée de l'extrait
-  G12 heatmap_accuracy.png     Heatmap méthodes × conditions (% accuracy, colormap continue)
+  ── Pipeline evaluation (from eval_*.json) ─────────────────────────────
+  G6  method_accuracy.png      Accuracy per method × condition (with standard deviation)
+  G9  stage_comparison.png     Stage 1 (FAISS alone) vs Stage 2 (+ fingerprint)
+  G11 duration_impact.png      Accuracy as a function of excerpt duration
+  G12 heatmap_accuracy.png     Heatmap methods × conditions (% accuracy, continuous colormap)
 
-Workflow :
+Workflow:
   python manage.py benchmark    --method mfcc --full --label mfcc
   python manage.py benchmark    --method clap --full --label clap
   python manage.py evaluate     --methods mfcc clap
@@ -27,7 +27,7 @@ Workflow :
       --eval      results/eval/eval_*.json \\
       --rir-eval  results/eval/rir_eval_*.json
 
-Point d'entrée : run_plots(benchmark_jsons, eval_jsons, rir_eval_jsons, out_dir)
+Entry point: run_plots(benchmark_jsons, eval_jsons, rir_eval_jsons, out_dir)
 """
 
 from __future__ import annotations
@@ -47,11 +47,11 @@ ROOT        = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "results"
 PLOTS_DIR   = RESULTS_DIR / "plots"
 
-# ─── Palette cohérente ───────────────────────────────────────────────────────
+# ─── Consistent palette ───────────────────────────────────────────────────────
 METHOD_COLORS = {"mfcc": "#4878d0", "clap": "#ee854a", "muq": "#6acc65",
                  "mert": "#d65f5f", "unknown": "#8c8c8c"}
 METHOD_LABELS = {"mfcc": "MFCC", "clap": "CLAP", "muq": "MuQ",
-                 "mert": "MERT", "unknown": "Inconnu"}
+                 "mert": "MERT", "unknown": "Unknown"}
 
 COND_LABELS = {
     "clean":  "Clean",
@@ -79,13 +79,13 @@ plt.rcParams.update({
     "figure.dpi":        DPI,
 })
 
-COLOR_WITH    = "#27ae60"   # vert  — avec RIR
-COLOR_WITHOUT = "#e74c3c"   # rouge — sans RIR
-COLOR_S1      = "#95a5a6"   # gris  — Stage 1 seul
-COLOR_S2      = "#2980b9"   # bleu  — Stage 2 final
+COLOR_WITH    = "#27ae60"   # green  — with RIR
+COLOR_WITHOUT = "#e74c3c"   # red   — without RIR
+COLOR_S1      = "#95a5a6"   # gray  — Stage 1 alone
+COLOR_S2      = "#2980b9"   # blue  — Stage 2 final
 
 
-# ─── Utilitaires ────────────────────────────────────────────────────────────
+# ─── Utilities ────────────────────────────────────────────────────────────
 
 def _save(fig: plt.Figure, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,13 +95,13 @@ def _save(fig: plt.Figure, path: Path) -> None:
 
 
 def _cond_order(conds: list[str]) -> list[str]:
-    """Réordonne les conditions dans l'ordre logique."""
+    """Reorder the conditions in logical order."""
     order = list(COND_LABELS.keys())
     return sorted(conds, key=lambda c: order.index(c) if c in order else 99)
 
 
 def _bar_label(ax, bars, fmt="{:.0f}%", offset=1.5):
-    """Annote les barres avec leur valeur."""
+    """Annotate the bars with their value."""
     for bar in bars:
         h = bar.get_height()
         if h > 3:
@@ -109,14 +109,14 @@ def _bar_label(ax, bars, fmt="{:.0f}%", offset=1.5):
                     fmt.format(h), ha="center", va="bottom", fontsize=8)
 
 
-# ─── Chargement ─────────────────────────────────────────────────────────────
+# ─── Loading ─────────────────────────────────────────────────────────────
 
 def load_benchmarks(json_paths: list[str | Path]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for p in json_paths:
         p = Path(p)
         if not p.exists():
-            print(f"  [plots] ⚠  Introuvable : {p}")
+            print(f"  [plots] ⚠  Not found: {p}")
             continue
         with open(p, encoding="utf-8") as f:
             data = json.load(f)
@@ -139,12 +139,12 @@ def load_evaluations(json_paths: list[str | Path]) -> list[dict]:
     return out
 
 
-# ─── G1 — Paired bar : accuracy avec vs sans RIR ────────────────────────────
+# ─── G1 — Paired bar : accuracy with vs without RIR ────────────────────────────
 
 def plot_rir_paired_bar(rir_evals: list[dict], out_dir: Path) -> None:
     """
-    G1 — Pour chaque condition : 2 barres côte à côte (sans RIR vs avec RIR).
-    Une figure par méthode si plusieurs méthodes sont présentes.
+    G1 — For each condition: 2 side-by-side bars (without RIR vs with RIR).
+    One figure per method if multiple methods are present.
     """
     for ev in rir_evals:
         methods    = ev.get("methods", [])
@@ -164,9 +164,9 @@ def plot_rir_paired_bar(rir_evals: list[dict], out_dir: Path) -> None:
             w     = 0.35
             fig, ax = plt.subplots(figsize=FIG_WIDE)
 
-            bars1 = ax.bar(x - w/2, acc_without, w, label="Sans RIR",
+            bars1 = ax.bar(x - w/2, acc_without, w, label="Without RIR",
                            color=COLOR_WITHOUT, alpha=0.85, edgecolor="white")
-            bars2 = ax.bar(x + w/2, acc_with,    w, label="Avec RIR",
+            bars2 = ax.bar(x + w/2, acc_with,    w, label="With RIR",
                            color=COLOR_WITH,    alpha=0.85, edgecolor="white")
 
             _bar_label(ax, bars1)
@@ -174,15 +174,15 @@ def plot_rir_paired_bar(rir_evals: list[dict], out_dir: Path) -> None:
 
             ax.set_xticks(x)
             ax.set_xticklabels(cond_labels, fontsize=11)
-            ax.set_ylabel("Précision Top-1 (%)")
+            ax.set_ylabel("Top-1 Accuracy (%)")
             ax.set_ylim(0, 120)
-            ax.set_title(f"Impact de l'augmentation RIR sur la précision — "
+            ax.set_title(f"Impact of RIR augmentation on accuracy — "
                          f"{METHOD_LABELS.get(method, method.upper())}")
             ax.legend(loc="upper right")
             ax.axhline(100, color="gray", linewidth=0.7, linestyle="--", alpha=0.4)
 
             n = ev.get("n_tracks", "?")
-            ax.text(0.01, 0.97, f"n = {n} morceaux de test",
+            ax.text(0.01, 0.97, f"n = {n} test tracks",
                     transform=ax.transAxes, fontsize=9, color="gray", va="top")
 
             fig.tight_layout()
@@ -193,9 +193,9 @@ def plot_rir_paired_bar(rir_evals: list[dict], out_dir: Path) -> None:
 
 def plot_rir_delta(rir_evals: list[dict], out_dir: Path) -> None:
     """
-    G2 — Gain Δ Top-1 accuracy = avec_RIR − sans_RIR, par condition.
-    Barres vertes = amélioration, rouges = régression.
-    Une figure par méthode.
+    G2 — Gain Δ Top-1 accuracy = with_RIR − without_RIR, per condition.
+    Green bars = improvement, red bars = regression.
+    One figure per method.
     """
     for ev in rir_evals:
         methods    = ev.get("methods", [])
@@ -233,32 +233,32 @@ def plot_rir_delta(rir_evals: list[dict], out_dir: Path) -> None:
             ax.axhline(0, color="black", linewidth=1.2)
             ax.set_xticks(x)
             ax.set_xticklabels(cond_labels, fontsize=11)
-            ax.set_ylabel("Δ Précision Top-1 (points de pourcentage)")
-            ax.set_title(f"Gain apporté par l'augmentation RIR — "
+            ax.set_ylabel("Δ Top-1 Accuracy (percentage points)")
+            ax.set_title(f"Gain brought by RIR augmentation — "
                          f"{METHOD_LABELS.get(method, method.upper())}\n"
-                         f"(vert = amélioration, rouge = régression)")
+                         f"(green = improvement, red = regression)")
 
             patches = [
-                mpatches.Patch(color=COLOR_WITH,    label="Amélioration"),
-                mpatches.Patch(color=COLOR_WITHOUT, label="Régression"),
+                mpatches.Patch(color=COLOR_WITH,    label="Improvement"),
+                mpatches.Patch(color=COLOR_WITHOUT, label="Regression"),
             ]
             ax.legend(handles=patches, fontsize=9)
 
             n = ev.get("n_tracks", "?")
-            ax.text(0.01, 0.97, f"n = {n} morceaux de test",
+            ax.text(0.01, 0.97, f"n = {n} test tracks",
                     transform=ax.transAxes, fontsize=9, color="gray", va="top")
 
             fig.tight_layout()
             _save(fig, out_dir / f"rir_delta_{method}.png")
 
 
-# ─── G4 — Score FAISS par morceau avec/sans RIR ─────────────────────────────
+# ─── G4 — FAISS Score per track with/without RIR ─────────────────────────────
 
 def plot_rir_faiss_scores(rir_evals: list[dict], out_dir: Path) -> None:
     """
-    G4 — Score FAISS du bon morceau pour chaque morceau de test.
-    Condition clean uniquement (condition de référence).
-    Lignes connectant sans RIR → avec RIR pour chaque morceau.
+    G4 — FAISS score of the correct track for each test track.
+    Clean condition only (reference condition).
+    Lines connecting without RIR → with RIR for each track.
     """
     for ev in rir_evals:
         methods = ev.get("methods", [])
@@ -270,10 +270,10 @@ def plot_rir_faiss_scores(rir_evals: list[dict], out_dir: Path) -> None:
             tracks_without = method_data.get("clean_without_rir", {}).get("per_track", [])
 
             if not tracks_with or not tracks_without:
-                print(f"  [plots] ⚠  G4 : pas de données clean pour {method}")
+                print(f"  [plots] ⚠  G4 : no clean data for {method}")
                 continue
 
-            # Aligner par track_id
+            # Align by track_id
             by_id_with    = {r["track_id"]: r for r in tracks_with}
             by_id_without = {r["track_id"]: r for r in tracks_without}
             common_ids    = [tid for tid in by_id_with if tid in by_id_without]
@@ -293,12 +293,12 @@ def plot_rir_faiss_scores(rir_evals: list[dict], out_dir: Path) -> None:
 
             fig, ax = plt.subplots(figsize=(max(8, n * 1.4 + 2), 5))
 
-            bars1 = ax.bar(x - w/2, scores_without, w, label="Sans RIR",
+            bars1 = ax.bar(x - w/2, scores_without, w, label="Without RIR",
                            color=COLOR_WITHOUT, alpha=0.85, edgecolor="white")
-            bars2 = ax.bar(x + w/2, scores_with,    w, label="Avec RIR",
+            bars2 = ax.bar(x + w/2, scores_with,    w, label="With RIR",
                            color=COLOR_WITH,    alpha=0.85, edgecolor="white")
 
-            # Lignes de connexion (flèche du gain)
+            # Connection lines (gain arrow)
             for i, (sw, sn) in enumerate(zip(scores_with, scores_without)):
                 if sw > sn:
                     ax.annotate("", xy=(x[i] + w/2, sw), xytext=(x[i] - w/2, sn),
@@ -315,23 +315,23 @@ def plot_rir_faiss_scores(rir_evals: list[dict], out_dir: Path) -> None:
             ax.set_xticks(x)
             ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=9)
             ax.set_ylabel("Score FAISS (Stage 1)")
-            ax.set_title(f"Score FAISS du bon morceau avec et sans RIR — "
+            ax.set_title(f"FAISS score of the correct track with and without RIR — "
                          f"{METHOD_LABELS.get(method, method.upper())}"
-                         f"\n(condition clean, plus haut = meilleure identification)")
+                         f"\n(clean condition, higher = better identification)")
             ax.legend()
 
             fig.tight_layout()
             _save(fig, out_dir / f"rir_faiss_scores_{method}.png")
 
 
-# ─── G6 — Accuracy par méthode × condition (multi-tracks) ───────────────────
+# ─── G6 — Accuracy per method × condition (multi-tracks) ───────────────────
 
 def plot_method_accuracy(evaluations: list[dict], out_dir: Path) -> None:
     """
-    G6 — Grouped bar chart : Top-1 accuracy par méthode × condition.
-    Barres groupées par méthode, avec écart-type sur les N morceaux.
+    G6 — Grouped bar chart: Top-1 accuracy per method × condition.
+    Bars grouped by method, with standard deviation on the N tracks.
     """
-    # Agréger tous les JSON d'évaluation
+    # Aggregate all evaluation JSON
     methods_seen: list[str] = []
     conds_seen:   list[str] = []
 
@@ -384,17 +384,17 @@ def plot_method_accuracy(evaluations: list[dict], out_dir: Path) -> None:
 
     ax.set_xticks(x)
     ax.set_xticklabels(cond_labels, fontsize=11)
-    ax.set_ylabel("Précision Top-1 (%)")
+    ax.set_ylabel("Top-1 Accuracy (%)")
     ax.set_ylim(0, 120)
-    ax.set_title("Précision Top-1 par méthode et condition de dégradation\n"
-                 "(barres d'erreur = écart-type sur les morceaux de test)")
+    ax.set_title("Top-1 accuracy per method and degradation condition\n"
+                 "(error bars = standard deviation on test tracks)")
     ax.legend(loc="upper right")
     ax.axhline(100, color="gray", linewidth=0.7, linestyle="--", alpha=0.4)
 
     n_tracks = max(
         (ev.get("n_tracks", 0) for ev in evaluations), default=0
     )
-    ax.text(0.01, 0.97, f"n = {n_tracks} morceaux de test",
+    ax.text(0.01, 0.97, f"n = {n_tracks} test tracks",
             transform=ax.transAxes, fontsize=9, color="gray", va="top")
 
     fig.tight_layout()
@@ -405,8 +405,8 @@ def plot_method_accuracy(evaluations: list[dict], out_dir: Path) -> None:
 
 def plot_stage_comparison(evaluations: list[dict], out_dir: Path) -> None:
     """
-    G9 — Grouped bar : Top-1 accuracy Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint).
-    Montre le gain apporté par le re-ranking fingerprint.
+    G9 — Grouped bar: Top-1 accuracy Stage 1 (FAISS alone) vs Stage 2 (+ fingerprint).
+    Shows the gain brought by fingerprint re-ranking.
     """
     methods_seen: list[str] = []
     conds_seen:   list[str] = []
@@ -463,23 +463,23 @@ def plot_stage_comparison(evaluations: list[dict], out_dir: Path) -> None:
 
     ax.set_xticks(x)
     ax.set_xticklabels(cond_labels, fontsize=11)
-    ax.set_ylabel("Précision Top-1 (%)")
+    ax.set_ylabel("Top-1 Accuracy (%)")
     ax.set_ylim(0, 120)
-    ax.set_title("Impact du re-ranking par fingerprinting\n"
-                 "(hachuré = Stage 1 FAISS seul | plein = Stage 1 + Stage 2)")
+    ax.set_title("Impact of fingerprint re-ranking\n"
+                 "(hatched = Stage 1 FAISS alone | solid = Stage 1 + Stage 2)")
     ax.legend(loc="upper right", ncol=nm, fontsize=9)
 
     fig.tight_layout()
     _save(fig, out_dir / "stage_comparison.png")
 
 
-# ─── G11 — Impact de la durée de l'extrait ──────────────────────────────────
+# ─── G11 — Impact of excerpt duration ──────────────────────────────────────
 
 def plot_duration_impact(evaluations: list[dict], out_dir: Path) -> None:
     """
-    G11 — Précision Top-1 en fonction de la durée de l'extrait (5s, 10s, 15s, 30s).
-    Condition 'clean' uniquement.
-    Une ligne par méthode.
+    G11 — Top-1 accuracy as a function of excerpt duration (5s, 10s, 15s, 30s).
+    Clean condition only.
+    One line per method.
     """
     # {method: {duration_s: [top1]}}
     raw: dict[str, dict[int, list[float]]] = {}
@@ -498,14 +498,14 @@ def plot_duration_impact(evaluations: list[dict], out_dir: Path) -> None:
                 raw.setdefault(method, {}).setdefault(dur, []).append(top1)
 
     if not raw:
-        print("  [plots] ⚠  G11 : pas de données duration_s dans le manifest.\n"
-              "           Téléchargez des clips avec --duration 5 / 10 / 15 / 30.")
+        print("  [plots] ⚠  G11 : no duration_s data in the manifest.\n"
+              "           Download clips with --duration 5 / 10 / 15 / 30.")
         return
 
     durations = sorted({d for m in raw.values() for d in m})
     if len(durations) < 2:
-        print("  [plots] ⚠  G11 : moins de 2 durées différentes — "
-              "téléchargez des clips avec --duration 5, 10, 15, 30")
+        print("  [plots] ⚠  G11 : less than 2 different durations — "
+              "download clips with --duration 5, 10, 15, 30")
         return
 
     fig, ax = plt.subplots(figsize=FIG_STD)
@@ -531,13 +531,13 @@ def plot_duration_impact(evaluations: list[dict], out_dir: Path) -> None:
         plt.close(fig)
         return
 
-    ax.set_xlabel("Durée de l'extrait (secondes)")
-    ax.set_ylabel("Précision Top-1 (%)")
+    ax.set_xlabel("Excerpt duration (seconds)")
+    ax.set_ylabel("Top-1 Accuracy (%)")
     ax.set_ylim(-5, 110)
     ax.set_xticks(durations)
     ax.set_xticklabels([f"{d} s" for d in durations])
-    ax.set_title("Précision en fonction de la durée de l'extrait\n"
-                 "(condition clean — barres d'erreur = écart-type)")
+    ax.set_title("Accuracy as a function of excerpt duration\n"
+                 "(clean condition — error bars = standard deviation)")
     ax.axhline(50, color="gray", linewidth=0.8, linestyle="--", alpha=0.5,
                label="_seuil 50 %")
     ax.legend()
@@ -550,8 +550,8 @@ def plot_duration_impact(evaluations: list[dict], out_dir: Path) -> None:
 
 def plot_heatmap_accuracy(evaluations: list[dict], out_dir: Path) -> None:
     """
-    G12 — Heatmap méthodes × conditions.
-    Valeurs : Top-1 accuracy en % (colormap continue vert = bon, rouge = mauvais).
+    G12 — Heatmap methods × conditions.
+    Values: Top-1 accuracy in % (continuous colormap green = good, red = bad).
     """
     methods_seen: list[str] = []
     conds_seen:   list[str] = []
@@ -588,7 +588,7 @@ def plot_heatmap_accuracy(evaluations: list[dict], out_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
     im = ax.imshow(matrix, cmap=cmap, vmin=0, vmax=100, aspect="auto")
-    plt.colorbar(im, ax=ax, label="Précision Top-1 (%)", shrink=0.85)
+    plt.colorbar(im, ax=ax, label="Top-1 Accuracy (%)", shrink=0.85)
 
     for i in range(nr):
         for j in range(nc):
@@ -603,16 +603,16 @@ def plot_heatmap_accuracy(evaluations: list[dict], out_dir: Path) -> None:
     ax.set_yticklabels([METHOD_LABELS.get(m, m.upper()) for m in methods_seen],
                        fontsize=12, fontweight="bold")
     ax.tick_params(left=False, bottom=False)
-    ax.set_title("Précision Top-1 (%) par méthode et condition", pad=12)
+    ax.set_title("Top-1 Accuracy (%) per method and condition", pad=12)
 
     n_tracks = max((ev.get("n_tracks", 0) for ev in evaluations), default=0)
-    ax.set_xlabel(f"Condition de dégradation  (n = {n_tracks} morceaux de test)", fontsize=10)
+    ax.set_xlabel(f"Degradation condition  (n = {n_tracks} test tracks)", fontsize=10)
 
     fig.tight_layout()
     _save(fig, out_dir / "heatmap_accuracy.png")
 
 
-# ─── Point d'entrée public ──────────────────────────────────────────────────
+# ─── Public entry point ──────────────────────────────────────────────────
 
 def run_plots(
     benchmark_jsons:  list[str | Path] | None = None,
@@ -621,38 +621,38 @@ def run_plots(
     out_dir:          Path | None = None,
 ) -> None:
     """
-    Génère tous les graphiques disponibles selon les données fournies.
+    Generates all available graphs based on the provided data.
 
     Args:
-        benchmark_jsons  : JSON(s) de benchmark (un par méthode).
-        eval_jsons       : JSON(s) d'évaluation multi-tracks (evaluate.py).
-        rir_eval_jsons   : JSON(s) d'évaluation RIR (rir_evaluate).
-        out_dir          : dossier de sortie (défaut : results/plots/).
+        benchmark_jsons  : Benchmark JSON(s) (one per method).
+        eval_jsons       : Multi-track evaluation JSON(s) (from evaluate.py).
+        rir_eval_jsons   : RIR evaluation JSON(s) (from rir_evaluate).
+        out_dir          : Output directory (default: results/plots/).
     """
     out_dir = Path(out_dir) if out_dir else PLOTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[plots] Génération → {out_dir}\n")
+    print(f"\n[plots] Generation → {out_dir}\n")
 
     evaluations: list[dict] = []
     if eval_jsons:
         evaluations = load_evaluations(eval_jsons)
-        print(f"[plots] {len(evaluations)} évaluation(s) chargée(s)\n")
+        print(f"[plots] {len(evaluations)} evaluation(s) loaded\n")
 
     rir_evals: list[dict] = []
     if rir_eval_jsons:
         rir_evals = load_evaluations(rir_eval_jsons)
-        print(f"[plots] {len(rir_evals)} évaluation(s) RIR chargée(s)\n")
+        print(f"[plots] {len(rir_evals)} RIR evaluation(s) loaded\n")
 
-    # ── Graphiques RIR ──
+    # ── RIR Evaluation Charts ──
     if rir_evals:
-        print("── Comparaison RIR ──")
+        print("── RIR Comparison ──")
         plot_rir_paired_bar(rir_evals, out_dir)    # G1
         plot_rir_delta(rir_evals, out_dir)         # G2
         plot_rir_faiss_scores(rir_evals, out_dir)  # G4
         print()
 
-    # ── Graphiques évaluation pipeline ──
+    # ── Pipeline valuation charts ──
     if evaluations:
         print("── Pipeline ──")
         plot_method_accuracy(evaluations, out_dir)    # G6
@@ -662,17 +662,17 @@ def run_plots(
         print()
 
     if not rir_evals and not evaluations:
-        print("[plots] ⚠  Aucune donnée. Utilisez --eval et/ou --rir-eval.\n")
+        print("[plots] ⚠  No data. Use --eval and/or --rir-eval.\n")
         _print_workflow()
         return
 
     total = sum([bool(rir_evals) * 3, bool(evaluations) * 4])
-    print(f"[plots] {total} graphique(s) généré(s)")
+    print(f"[plots] {total} graph(s) generated")
     _print_workflow()
 
 
 def _print_workflow():
-    print("\nWorkflow complet :")
+    print("\nComplete workflow:")
     print("  python manage.py evaluate     --methods mfcc clap")
     print("  python manage.py rir-evaluate --methods clap")
     print("  python manage.py plots \\")

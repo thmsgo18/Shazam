@@ -1,13 +1,13 @@
 """
 src/evaluation/report_suite.py
 
-Suite d'évaluation orientée rapport :
-  - analyse des fichiers réels présents dans data/raw/manifest.json
-  - comparaison studio / micro / durée sur les requêtes réelles
-  - détection des manques dans le jeu de test
-  - génération d'un JSON, d'un résumé Markdown et de graphiques
+Report-oriented evaluation suite:
+  - analysis of real files present in data/raw/manifest.json
+  - comparison studio / micro / duration on real queries
+  - detection of gaps in the test set
+  - generation of a JSON, a Markdown summary and graphs
 
-Point d'entrée public :
+Public entry point:
   run_report_suite(methods=None, n_tracks=0, out_dir=None, plot=True)
 """
 
@@ -189,16 +189,16 @@ def run_report_suite(
     plot: bool = True,
 ) -> dict:
     """
-    Lance la suite d'évaluation orientée rapport sur les fichiers réels du manifest.
+    Launches the report-oriented evaluation suite on the real files of the manifest.
 
     Args:
-        methods: méthodes à évaluer (défaut : [config.EMBEDDING_METHOD]).
-        n_tracks: limite le nombre de tracks distincts du manifest (0 = tous).
-        out_dir: dossier de sortie JSON/Markdown.
-        plot: génère les graphiques associés.
+        methods: methods to evaluate (default: [config.EMBEDDING_METHOD]).
+        n_tracks: limits the number of distinct tracks from the manifest (0 = all).
+        out_dir: output folder for JSON/Markdown.
+        plot: generates the associated graphs.
 
     Returns:
-        Dict sérialisable avec les résultats détaillés.
+        Serializable dict with detailed results.
     """
     if methods is None:
         methods = [config.EMBEDDING_METHOD]
@@ -209,7 +209,7 @@ def run_report_suite(
 
     manifest = load_manifest()
     if not manifest:
-        print("[report-suite] ⚠ Aucun manifest trouvé ou aucun fichier listé.")
+        print("[report-suite] ⚠ No manifest found or no files listed.")
         return {}
 
     if n_tracks > 0:
@@ -245,7 +245,7 @@ def run_report_suite(
     raw_dir = ROOT / "data" / "raw"
     rows: list[dict] = []
     for method in methods:
-        print(f"\n[report-suite] Méthode : {method}")
+        print(f"\n[report-suite] Method: {method}")
         for entry in manifest:
             audio_path = raw_dir / entry["filename"]
             res = _evaluate_one(audio_path, entry["track_id"], method, "clean")
@@ -321,7 +321,7 @@ def run_report_suite(
     print(f"\n[report-suite] JSON     → {out_json}")
     print(f"[report-suite] Markdown → {out_md}")
     if missing_pairs:
-        print("[report-suite] Gaps détectés :")
+        print("[report-suite] Gaps detected:")
         for msg in missing_pairs:
             print(f"  • {msg}")
 

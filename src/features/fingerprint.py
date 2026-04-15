@@ -58,7 +58,7 @@ def extract_fingerprint(waveform: np.ndarray, sr: int) -> set[tuple]:
             delta_t = t2 - t1
 
             if config.FP_MIN_DELTA_T <= delta_t <= config.FP_MAX_DELTA_T:
-                # t1 inclus → alignement temporel possible lors du matching
+                # t1 included → temporal alignment possible during matching
                 hashes.add((int(f1), int(f2), int(delta_t), int(t1)))
                 connections += 1
                 if connections >= config.FP_FAN_OUT:
@@ -79,33 +79,33 @@ def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> fl
     Calculates the similarity between two fingerprints using temporal alignment.
 
     Format v2 (4-tuples : f1, f2, delta_t, t1_anchor) :
-        Pour chaque hash (f1, f2, delta_t) commun entre la requête et le candidat,
-        on calcule l'offset temporel : offset = t1_candidate - t1_query.
-        Les vrais matches s'accumulent tous au même offset (la position du clip dans
-        le morceau). Les faux positifs ont des offsets aléatoires → ne s'accumulent pas.
-        Score = pic de l'histogramme des offsets / |fp_query|
+        For each common hash (f1, f2, delta_t) between the query and the candidate,
+        we calculate the temporal offset: offset = t1_candidate - t1_query.
+        True matches all accumulate at the same offset (the position of the clip in
+        the track). False positives have random offsets → do not accumulate.
+        Score = peak of the offsets histogram / |fp_query|
 
-    Format v1 (3-tuples, rétrocompatibilité) :
+    Format v1 (3-tuples, retrocompatibility) :
         Score = |fp_query ∩ fp_candidate| / |fp_query|  (simple recall)
 
     Args:
-        fp_query:     fingerprint de l'extrait requête.
-        fp_candidate: fingerprint du morceau candidat (base de données).
+        fp_query:     fingerprint of the query excerpt.
+        fp_candidate: fingerprint of the candidate track (database).
 
     Returns:
-        Score entre 0.0 et 1.0. Retourne 0.0 si l'un des fingerprints est vide.
+        Score between 0.0 and 1.0. Returns 0.0 if one of the fingerprints is empty.
     """
     if not fp_query or not fp_candidate:
         return 0.0
 
-    # Détection du format v1 / v2
+    # Detection of v1 / v2 format
     sample = next(iter(fp_query))
     if len(sample) == 3:
-        # v1 — rétrocompatibilité : simple intersection
+        # v1 — retrocompatibility: simple intersection
         return len(fp_query.intersection(fp_candidate)) / len(fp_query)
 
-    # v2 — alignement temporel via histogramme d'offsets
-    # Construit un index {(f1,f2,delta_t): [t1_db, ...]} pour le candidat
+    # v2 — temporal alignment via offsets histogram
+    # Build an index {(f1,f2,delta_t): [t1_db, ...]} for the candidate
     candidate_index: dict[tuple, list[int]] = {}
     for (f1, f2, dt, t1_db) in fp_candidate:
         key = (f1, f2, dt)
@@ -113,7 +113,7 @@ def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> fl
             candidate_index[key] = []
         candidate_index[key].append(t1_db)
 
-    # Histogramme des offsets pour les hashes communs
+    # Histogram of offsets for common hashes
     offsets: dict[int, int] = {}
     for (f1, f2, dt, t1_query) in fp_query:
         key = (f1, f2, dt)

@@ -1,12 +1,13 @@
 """
 src/api/app.py
 
-Point d'entrée canonique pour l'identification audio du projet.
+Canonical entry point for project audio identification.
 
-Ce module sert à la fois :
-  - d'interface CLI (`python src/api/app.py ...`)
-  - de couche réutilisable pour `manage.py identify`
-  - de couche réutilisable pour le backend web FastAPI
+This module serves as:
+
+- a CLI interface (`python src/api/app.py ...`)
+- a reusable layer for `manage.py identify`
+- a reusable layer for the FastAPI web backend
 """
 
 from __future__ import annotations
@@ -37,14 +38,14 @@ _METADATA_MTIME_NS: int | None = None
 
 
 def ensure_project_root_context() -> None:
-    """Force un contexte d'exécution cohérent pour tous les points d'entrée."""
+    """Enforces a consistent execution context for all entry points."""
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
     os.chdir(ROOT)
 
 
 def _clean(val, default=None):
-    """Retourne default pour NaN / chaînes vides, sinon la valeur."""
+    """Returns default for NaN / empty strings, otherwise the value."""
     if val is None:
         return default
     if isinstance(val, float) and math.isnan(val):
@@ -53,7 +54,7 @@ def _clean(val, default=None):
 
 
 def _load_metadata(force_reload: bool = False) -> dict[str, dict]:
-    """Retourne {track_id: {...}} depuis metadata.parquet."""
+    """Returns {track_id: {...}} from metadata.parquet."""
     import pandas as pd
 
     global _METADATA_CACHE, _METADATA_MTIME_NS
@@ -90,13 +91,14 @@ def warmup_runtime(
     local_files_only: bool = True,
 ) -> dict:
     """
-    Précharge en mémoire les composants lourds utilisés par l'API web.
+    Preload the resource-intensive components used by the web API into memory.
 
-    Objectif :
-      - éviter le coût du premier appel /api/identify
-      - charger l'index FAISS + segments
-      - charger les métadonnées
-      - optionnellement initialiser le modèle d'embedding configuré
+    Objectives:
+
+    - Avoid the overhead of the first /api/identify call
+    - Load the FAISS index and segments
+    - Load the metadata
+    - Optionally initialize the configured embedding model
     """
     ensure_project_root_context()
 
@@ -145,7 +147,7 @@ def warmup_runtime(
 
 
 def _streaming_links(artist: str, title: str) -> dict[str, str]:
-    """Construit des liens de recherche vers les plateformes de streaming."""
+    """Builds search links to streaming platforms."""
     query = f"{artist} {title}".replace(" ", "+")
     return {
         "youtube": f"https://www.youtube.com/results?search_query={query}",
@@ -156,7 +158,7 @@ def _streaming_links(artist: str, title: str) -> dict[str, str]:
 
 
 def _recommendations(track_id: str, genre: str | None, metadata: dict[str, dict], top: int = 4) -> list[dict]:
-    """Retourne des recommandations simples basées sur le genre."""
+    """Returns simple recommendations based on the genre."""
     if not genre:
         return []
 
@@ -178,7 +180,7 @@ def _recommendations(track_id: str, genre: str | None, metadata: dict[str, dict]
 
 
 def get_ui_config() -> dict:
-    """Expose la configuration UI lue depuis src/config.py."""
+    """Expose the UI configuration read from src/config.py."""
     return {
         "listen_duration": config.UI_LISTEN_DURATION,
         "confidence_ratio": config.UI_CONFIDENCE_RATIO,
@@ -193,7 +195,7 @@ def identify_audio(
     detailed: bool = False,
     metadata: dict[str, dict] | None = None,
 ) -> list[dict]:
-    """Retourne les résultats d'identification enrichis avec les métadonnées."""
+    """Returns the identification results enriched with metadata."""
     ensure_project_root_context()
 
     top_n = top if top is not None else config.VECTOR_TOP_N_RESULTS
@@ -236,7 +238,7 @@ def build_identification_response(
     top: int | None = None,
     detailed: bool = False,
 ) -> dict:
-    """Construit la réponse canonique utilisée par l'interface web."""
+    """Builds the canonical response used by the web interface."""
     metadata = _load_metadata()
     results = identify_audio(audio_file, method=method, top=top, detailed=detailed, metadata=metadata)
     if not results:

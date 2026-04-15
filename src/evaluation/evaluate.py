@@ -1,24 +1,24 @@
 """
 src/evaluation/evaluate.py
 
-Évaluation comparative du pipeline sur un ensemble de morceaux de test.
+Comparative pipeline evaluation on a set of test chunks.
 
-Principe :
-  1. Lire data/raw/manifest.json — liste des fichiers de test avec leur track_id attendu.
-     (Le manifest est alimenté automatiquement par `manage.py download-audio`.)
-  2. Pour chaque fichier × méthode × condition de dégradation :
-       appliquer la dégradation → fichier temporaire → identify_track() → métriques.
-  3. Calculer Top-1, Top-5, MRR (Mean Reciprocal Rank) et latence moyenne.
-  4. Sauvegarder un JSON dans results/eval/ + générer les graphiques.
+Principle:
+  1. Read data/raw/manifest.json — a list of test files with their expected track_id.
+     (The manifest is automatically populated by `manage.py download-audio`.)
+  2. For each file × method × degradation condition:
+     apply the degradation → temporary file → identify_track() → metrics.
+  3. Calculate Top-1, Top-5, MRR (Mean Reciprocal Rank), and average latency.
+  4. Save a JSON file in results/eval/ and generate the graphs.
 
-Conditions de dégradation évaluées :
-  clean   — fichier original sans modification
-  snr_20  — bruit blanc gaussien à SNR 20 dB  (dégradation légère)
-  snr_10  — bruit blanc gaussien à SNR 10 dB  (dégradation sévère)
-  reverb  — reverb synthétique (convolution RIR)
-  combo   — SNR 15 dB + reverb + passe-bande 300–7 kHz
+Evaluated degradation conditions:
+  clean — original file without modification
+  snr_20 — Gaussian white noise at SNR 20 dB (slight degradation)
+  snr_10 — Gaussian white noise at SNR 10 dB (severe degradation)
+  reverb — synthetic reverb (RIR convolution)
+  combo — SNR 15 dB + reverb + 300–7 kHz bandpass filter
 
-Point d'entrée public : run_evaluate(methods, conditions, n_tracks, out_dir)
+Public entry point: run_evaluate(methods, conditions, n_tracks, out_dir)
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ RESULTS_DIR   = ROOT / "results" / "eval"
 CACHE_DIR     = RESULTS_DIR / "cache"
 console       = Console()
 
-# Réutilise les fonctions de dégradation déjà présentes dans benchmark.py
+# Reuses the degradation functions already present in benchmark.py
 from src.evaluation.benchmark import (
     add_noise_at_snr,
     add_reverb,
@@ -63,7 +63,7 @@ from src.evaluation.benchmark import (
     save_temp_wav,
 )
 
-# ─── Conditions de dégradation ──────────────────────────────────────────────
+# ─── Conditions of deterioration ──────────────────────────────────────────────
 
 ALL_CONDITIONS = ["clean", "snr_20", "snr_10", "reverb", "combo"]
 
@@ -178,7 +178,7 @@ def _rir_progress_label(entry: dict, method: str, condition: str) -> str:
 
 
 def _apply_condition(waveform: np.ndarray, sr: int, condition: str) -> np.ndarray:
-    """Applique une dégradation à un waveform selon la condition spécifiée."""
+    """Applies a degradation to a waveform according to the specified condition."""
     np.random.seed(42)
     if condition == "clean":
         return waveform
@@ -200,33 +200,33 @@ def _apply_condition(waveform: np.ndarray, sr: int, condition: str) -> np.ndarra
 
 def load_manifest(path: Path = MANIFEST_PATH) -> list[dict]:
     """
-    Charge le fichier manifest.json qui mappe filename → track_id.
+    Loads the manifest.json file which maps filename → track_id. 
 
-    Format attendu :
-    [
-      {
-        "filename":  "Miley Cyrus - Flowers__middle_30s.mp3",
-        "track_id":  "f01ab00f1fdc5a57fd2676f4d68631a8",
-        "artist":    "Miley Cyrus",
-        "title":     "Flowers",
-        "position":  "middle",
-        "duration_s": 30
-      },
-      ...
+    Expected format: 
+    [ 
+      { 
+        "filename": "Miley Cyrus - Flowers__middle_30s.mp3", 
+        "track_id": "f01ab00f1fdc5a57fd2676f4d68631a8", 
+        "artist": "Miley Cyrus", 
+        "title": "Flowers", 
+        "position": "middle", 
+        "duration_s": 30 
+      }, 
+      ... 
     ]
     """
     if not path.exists():
         return []
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    # Filtrer les entrées dont le fichier existe encore
+    # Filter entries where the file still exists
     raw_dir = ROOT / "data" / "raw"
     return [e for e in data if (raw_dir / e["filename"]).exists()]
 
 
 def _filter_rir_manifest_entries(entries: list[dict]) -> list[dict]:
     """
-    `eval rir` ne doit comparer que les vraies requêtes du rapport :
+    `eval rir` should only compare the actual requests in the report:
     - data/raw/reference_clips/*
     - data/raw/mic_recordings/*
     """
@@ -240,11 +240,11 @@ def _filter_rir_manifest_entries(entries: list[dict]) -> list[dict]:
 
 def find_track_id_by_query(query: str) -> str | None:
     """
-    Cherche un track_id dans metadata.parquet par correspondance textuelle.
+    Searches for a track_id in metadata.parquet using text matching.
 
-    Utilise la similarité de Jaccard sur les mots entre la requête
-    et le champ 'artist + title' de chaque track.
-    Retourne None si aucun match avec un score > 0.25.
+    Uses Jaccard similarity on words between the query
+    and the 'artist + title' field of each track.
+    Returns None if no match is found with a score > 0.25.
     """
     if not METADATA_PATH.exists():
         return None
@@ -269,7 +269,7 @@ def find_track_id_by_query(query: str) -> str | None:
     return best_id if best_score > 0.25 else None
 
 
-# ─── Évaluation d'un seul fichier × méthode × condition ─────────────────────
+# ─── Evaluation of a single file × method × condition ─────────────────────
 
 def _evaluate_one(
     audio_path: Path,
@@ -278,7 +278,7 @@ def _evaluate_one(
     condition: str,
 ) -> dict:
     """
-    Évalue un fichier audio pour une méthode et une condition donnée.
+    Evaluates an audio file for a given method and condition.
 
     Returns:
         {top1, top5, rank, score_final, score_faiss, score_fp, latency_s, error}
@@ -339,7 +339,7 @@ def _evaluate_one(
     top1 = rank == 1
     top5 = rank is not None and rank <= 5
 
-    # Rang Stage 1 : tri par score_faiss uniquement (avant re-ranking fingerprint)
+    # Stage 1 Ranking: sorted by score_faiss only (before re-ranking fingerprint)
     sorted_s1   = sorted(results, key=lambda r: r[2] if len(r) > 2 else 0.0, reverse=True)
     stage1_rank = next((i + 1 for i, r in enumerate(sorted_s1) if r[0] == track_id), None)
 
@@ -365,7 +365,7 @@ def _evaluate_one(
     }
 
 
-# ─── Point d'entrée public ──────────────────────────────────────────────────
+# ─── Public entry point ──────────────────────────────────────────────────
 
 def run_evaluate(
     methods:    list[str] | None = None,
@@ -375,17 +375,18 @@ def run_evaluate(
     plot:       bool = True,
 ) -> dict:
     """
-    Lance l'évaluation comparative multi-tracks multi-méthodes.
+    Launches a multi-track, multi-method comparative evaluation.
 
     Args:
-        methods:    liste de méthodes à évaluer (défaut : ["mfcc", "clap"]).
-        conditions: liste de conditions (défaut : toutes les 5 conditions).
-        n_tracks:   limiter à N tracks du manifest (0 = tous).
-        out_dir:    dossier de sortie pour le JSON (défaut : results/eval/).
-        plot:       si True, génère les graphiques après l'évaluation.
+
+        methods:    List of methods to evaluate (default: ["mfcc", "clap"]).
+        conditions: List of conditions (default: all 5 conditions).
+        n_tracks:   Limit to N tracks from the manifest (0 = all).
+        out_dir:    Output directory for the JSON (default: results/eval/).
+        plot:       If True, generates graphs after the evaluation.
 
     Returns:
-        Dict résultats complet (aussi sauvegardé en JSON).
+        Dict complete results (also saved as JSON).
     """
     if methods is None:
         methods = ["mfcc", "clap"]
@@ -399,11 +400,11 @@ def run_evaluate(
     manifest = load_manifest()
     if not manifest:
         print(
-            "[evaluate] ⚠  Aucun fichier de test dans data/raw/manifest.json.\n"
-            "           Téléchargez des clips de test avec :\n"
-            "             python manage.py download-audio \"Artiste Titre\" --duration 30\n"
-            "           Les tracks doivent être dans la base (manage.py ingest) pour que\n"
-            "           le manifest soit renseigné automatiquement."
+            "[evaluate] ⚠  No test files in data/raw/manifest.json.\n"
+            "           Upload test clips with:\n"
+            "           python manage.py download-audio \"Artist Title\" --duration 30\n"
+            "           Tracks must be in the database (manage.py ingest) for\n"
+            "           the manifest to be populated automatically."
         )
         return {}
 
@@ -412,12 +413,12 @@ def run_evaluate(
 
     raw_dir = ROOT / "data" / "raw"
 
-    print(f"\n[evaluate] {len(manifest)} track(s) de test | "
-          f"méthodes : {methods} | conditions : {conditions}\n")
+    print(f"\n[evaluate] {len(manifest)} test track(s) | "
+          f"methods : {methods} | conditions : {conditions}\n")
     print(f"{'─'*70}")
 
-    # ── Évaluation ──
-    # Structure : results[method][condition] = liste de résultats par track
+    # ── Evaluation ──
+    # Structure : results[method][condition] = list of results per track
     per_method_condition: dict[str, dict[str, list[dict]]] = {
         m: {c: [] for c in conditions} for m in methods
     }
@@ -458,7 +459,7 @@ def run_evaluate(
 
     print(f"\n{'─'*70}")
 
-    # ── Agrégation des métriques ──
+    # ── Metrics aggregation ──
     agg_results: dict[str, dict[str, dict]] = {}
     summary:     dict[str, dict]             = {}
 
@@ -510,10 +511,10 @@ def run_evaluate(
             ),
         }
 
-    # ── Affichage du récapitulatif ──
-    print("\n[evaluate] Récapitulatif :\n")
+    # ── Display summary ──
+    print("\n[evaluate] Summary :\n")
     col_w = 14
-    header = f"  {'Méthode':8s}" + "".join(
+    header = f"  {'MMethod':8s}" + "".join(
         f"  {CONDITION_LABELS.get(c, c)[:col_w].center(col_w)}" for c in conditions
     )
     print(header)
@@ -534,7 +535,7 @@ def run_evaluate(
               f"| Global Top-1: {s['overall_top1_pct']:>5.1f}%  "
               f"| Latence moy: {s['mean_latency_s']:.1f} s")
 
-    # ── Sauvegarde JSON ──
+    # ── Save JSON ──
     out_data = {
         "timestamp":  datetime.now().isoformat(),
         "methods":    methods,
@@ -549,7 +550,7 @@ def run_evaluate(
         json.dump(out_data, f, ensure_ascii=False, indent=2)
     print(f"\n  JSON → {json_path}")
 
-    # ── Graphiques ──
+    # ── Graphs ──
     if plot:
         from src.evaluation.plots import run_plots
         plots_dir = ROOT / "results" / "plots"
@@ -558,7 +559,7 @@ def run_evaluate(
     return out_data
 
 
-# ─── Évaluation RIR multi-tracks ─────────────────────────────────────────────
+# ─── Evaluation RIR multi-tracks ──────────────────────────────────────────────
 
 def run_rir_evaluate(
     methods:    list[str] | None = None,
@@ -568,22 +569,23 @@ def run_rir_evaluate(
     plot:       bool = True,
 ) -> dict:
     """
-    Compare les performances Stage 1 (FAISS) avec et sans vecteurs RIR,
-    sur plusieurs morceaux et plusieurs conditions de dégradation.
+    Compare Stage 1 (FAISS) performance with and without RIR vectors,
+    across multiple chunks and degradation conditions.
 
-    L'index sans RIR est construit en mémoire une seule fois par méthode
-    (pas de modification de la base).
+    The index without RIR is built in memory only once per method
+    (no database modification).
 
-    Produit :
+    Output:
       results/eval/rir_eval_TIMESTAMP.json
-      results/plots/rir_*.png (si plot=True)
+      results/plots/rir_*.png (if plot=True)
 
     Args:
-        methods:    méthodes à évaluer (défaut : [config.EMBEDDING_METHOD]).
-        conditions: conditions de dégradation (défaut : toutes les 5).
-        n_tracks:   limiter à N tracks du manifest (0 = tous).
-        out_dir:    dossier de sortie JSON.
-        plot:       générer les graphiques après.
+      methods:    methods to evaluate (default: [config.EMBEDDING_METHOD]).
+      conditions: degradation conditions (default: all 5).
+      n_tracks:   limit to N manifest tracks (0 = all).
+      out_dir:    JSON output directory.
+      plot:       generate the graphs afterward.
+    
     """
     import src.config as _cfg
     if methods is None:
@@ -597,16 +599,16 @@ def run_rir_evaluate(
     manifest = load_manifest()
     if not manifest:
         print(
-            "[rir-evaluate] ⚠  Aucun fichier de test dans data/raw/manifest.json.\n"
-            "               Téléchargez des clips avec : manage.py download-audio"
+            "[rir-evaluate] ⚠  No test files in data/raw/manifest.json.\n"
+            "               Download audio clips with: manage.py download-audio"
         )
         return {}
 
     manifest = _filter_rir_manifest_entries(manifest)
     if not manifest:
         print(
-            "[rir-evaluate] ⚠  Aucune entrée compatible pour RIR.\n"
-            "               Attendu : data/raw/reference_clips/* ou data/raw/mic_recordings/*"
+            "[rir-evaluate] ⚠  No compatible entries for RIR.\n"
+            "               Expected: data/raw/reference_clips/* or data/raw/mic_recordings/*"
         )
         return {}
 
@@ -617,7 +619,7 @@ def run_rir_evaluate(
     cache_path = _rir_cache_path(manifest, methods, conditions)
     resume_cache = _load_jsonl_cache(cache_path)
     console.print(
-        f"\n[rir-evaluate] {len(manifest)} track(s) | méthodes : {methods} | "
+        f"\n[rir-evaluate] {len(manifest)} track(s) | methods : {methods} | "
         f"conditions : {conditions}\n{'─'*70}"
     )
     expected_keys = {
@@ -628,8 +630,8 @@ def run_rir_evaluate(
     }
     resumed = sum(1 for key in expected_keys if key in resume_cache)
     if resumed:
-        console.print(f"[rir-evaluate] Reprise trouvée : {resumed}/{len(expected_keys)} évaluation(s) déjà calculée(s)")
-    console.print(f"[rir-evaluate] Cache de reprise : {cache_path}")
+        console.print(f"[rir-evaluate] Resume found : {resumed}/{len(expected_keys)} evaluation(s) already calculated")
+    console.print(f"[rir-evaluate] Resume cache : {cache_path}")
 
     # Structure : results[method][condition] = {with_rir: [...], without_rir: [...]}
     per_method: dict = {
@@ -637,17 +639,17 @@ def run_rir_evaluate(
         for m in methods
     }
 
-    # Sur Apple Silicon, il est plus sûr de charger le modèle AVANT FAISS.
-    # On garde aussi ces phases hors de la barre globale pour éviter
-    # tout conflit d'affichage avec la progression "RIR eval".
+    # On Apple Silicon, it is safer to charge the model BEFORE FIXING.
+    # We also keep these phases out of the overall bar to avoid
+    # any display conflict with the "RIR eval" progress.
     no_rir_indexes: dict[str, tuple] = {}
     failed_methods: set[str] = set()
     for method in methods:
-        console.print(f"\n[{method.upper()}] Préchargement du modèle…")
+        console.print(f"\n[{method.upper()}] Preloading the model…")
         try:
             _preload_embedding_model(method)
         except Exception as e:
-            console.print(f"  ⚠  Impossible de préparer le modèle : {e}")
+            console.print(f"  ⚠  Unable to prepare the model: {e}")
             failed_methods.add(method)
 
     from src.evaluation.rir_impact import rir_impact_scores, load_no_rir_index_cached
@@ -656,12 +658,12 @@ def run_rir_evaluate(
         if method in failed_methods:
             continue
         collection_key = _cfg.get_collection_key(method)
-        console.print(f"[{method.upper()}] Préparation de l'index sans RIR…")
+        console.print(f"[{method.upper()}] Preparing the no-RIR index…")
         try:
             no_rir_indexes[method] = load_no_rir_index_cached(collection_key)
             _release_eval_memory()
         except Exception as e:
-            console.print(f"  ⚠  Impossible de préparer l'index sans RIR : {e}")
+            console.print(f"  ⚠  Unable to prepare the no-RIR index: {e}")
             failed_methods.add(method)
 
     total_tests = len(methods) * len(manifest) * len(conditions)
@@ -758,7 +760,7 @@ def run_rir_evaluate(
                     per_method[method][condition]["without_rir"].append(row_no)
                     progress.advance(task_id)
 
-    # ── Agrégation ──
+    # ── Aggregation ──
     agg: dict = {}
     for method in methods:
         agg[method] = {}
@@ -780,7 +782,7 @@ def run_rir_evaluate(
                     "per_track":        rows,
                 }
 
-    # ── Sauvegarde JSON ──
+    # ── Save JSON ──
     out_data = {
         "timestamp":  datetime.now().isoformat(),
         "type":       "rir_evaluation",
@@ -796,7 +798,7 @@ def run_rir_evaluate(
         json.dump(out_data, f, ensure_ascii=False, indent=2)
     print(f"\n  JSON → {json_path}")
 
-    # ── Graphiques ──
+    # ── Graphs ──
     if plot:
         from src.evaluation.plots import run_plots
         plots_dir = ROOT / "results" / "plots"

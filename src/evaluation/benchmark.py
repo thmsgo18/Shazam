@@ -1,23 +1,23 @@
 """
 src/evaluation/benchmark.py
 
-Benchmark de robustesse pour la reconnaissance musicale.
+Robustness Benchmark for Music Recognition
 
-Méthodologie :
-  - Fichier audio fourni en paramètre (enregistré dans le manifest via download-test)
-  - Le track cible est auto-détecté depuis data/raw/manifest.json
-  - 4 cas de test en mode rapide, ~10 en mode complet :
-      1. CLEAN  | original      — fichier fourni tel quel
-      2. SIM    | bruit SNR 20dB
-      3. SIM    | reverb léger
-      4. SIM    | combo bruit+reverb+filtre (cas difficile)
-      ... (mode --full : +6 dégradations supplémentaires)
+Methodology:
+    - Audio file provided as a parameter (saved in the manifest via download-test)
+    - The target track is automatically detected from data/raw/manifest.json
+    - 4 test cases in quick mode, ~10 in full mode:
+        1. CLEAN | original — file provided as is
+        2. SIM   | noise SNR 20dB
+        3. SIM   | light reverb
+        4. SIM   | noise+reverb+filter combo (difficult case)
+        ... (--full mode: +6 additional degradations)
 
-  - Les résultats sont loggés dans results/benchmark/benchmark_TIMESTAMP.json
+    - Results are logged in results/benchmark/benchmark_TIMESTAMP.json
 
-Points d'entrée publics :
-  run_benchmark(audio, label_run, full)  — lance un benchmark sur un fichier audio
-  run_compare(json_paths)               — compare plusieurs runs JSON
+Public entry points:
+  run_benchmark(audio, label_run, full) — runs a benchmark on an audio file
+  run_compare(json_paths) — compares multiple JSON runs
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ import soundfile as sf
 ROOT        = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "results" / "benchmark"
 
-# Couleurs terminal
+# Terminal colors
 GREEN  = "\033[92m"
 RED    = "\033[91m"
 YELLOW = "\033[93m"
@@ -52,10 +52,10 @@ DIM    = "\033[2m"
 
 def _lookup_target(audio_path: str) -> tuple[str | None, str]:
     """
-    Cherche le track_id et le label lisible d'un fichier audio dans le manifest.
+    Searches for the track_id and readable label of an audio file in the manifest.
 
     Returns:
-        (track_id, label) — track_id peut être None si non trouvé.
+        (track_id, label) — track_id can be None if not found.
     """
     manifest = ROOT / "data" / "raw" / "manifest.json"
     filename = Path(audio_path).name
@@ -73,16 +73,16 @@ def _lookup_target(audio_path: str) -> tuple[str | None, str]:
         except Exception:
             pass
 
-    # Non trouvé dans le manifest — on continue sans target connu
+    # Not found in the manifest — we continue without a known target
     return None, Path(audio_path).stem
 
 
 # ---------------------------------------------------------------------------
-# Dégradations simulées
+# Simulated degradations
 # ---------------------------------------------------------------------------
 
 def add_noise_at_snr(waveform: np.ndarray, snr_db: float) -> np.ndarray:
-    """Ajoute du bruit blanc gaussien à un SNR cible (en dB)."""
+    """Adds gaussian white noise to achieve a target SNR (in dB)."""
     signal_power = np.mean(waveform ** 2)
     if signal_power == 0:
         return waveform
@@ -92,7 +92,7 @@ def add_noise_at_snr(waveform: np.ndarray, snr_db: float) -> np.ndarray:
 
 
 def add_reverb(waveform: np.ndarray, sr: int, decay: float = 0.3) -> np.ndarray:
-    """Reverb simple par convolution avec une RIR synthétique."""
+    """Simple reverb by convolution with a synthetic RIR."""
     from scipy.signal import fftconvolve
     rir_len     = int(0.5 * sr)
     rir         = np.zeros(rir_len)
@@ -109,14 +109,14 @@ def add_reverb(waveform: np.ndarray, sr: int, decay: float = 0.3) -> np.ndarray:
 
 
 def apply_bandpass(waveform: np.ndarray, sr: int, low_hz: float = 300, high_hz: float = 7000) -> np.ndarray:
-    """Filtre passe-bande pour simuler la réponse d'un micro bas de gamme."""
+    """Applies a bandpass filter to simulate the response of a low-end microphone."""
     from scipy.signal import butter, sosfilt
     sos = butter(4, [low_hz, high_hz], btype="band", fs=sr, output="sos")
     return sosfilt(sos, waveform).astype(np.float32)
 
 
 def simulate_opus_codec(waveform: np.ndarray, sr: int, bitrate: int = 32000) -> np.ndarray:
-    """Simule la dégradation du codec Opus via encodage/décodage."""
+    """Simulates the degradation of the Opus codec via encoding/decoding."""
     try:
         import subprocess
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_in:
@@ -160,31 +160,31 @@ def compute_snr(clean: np.ndarray, noisy: np.ndarray) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Suite de tests
+# Test suite
 # ---------------------------------------------------------------------------
 
 def build_test_suite(audio_path: str, full: bool = False) -> list[dict]:
     """
-    Construit la liste des cas de test à partir du fichier audio fourni.
+    Builds the list of test cases from the provided audio file.
 
     Args:
-        audio_path: chemin vers le fichier audio de référence (clean).
-        full:       si True, génère ~10 cas (défaut : 4 cas rapides).
+        audio_path: path to the reference audio file (clean).
+        full:       if True, generates ~10 cases (default : 4 fast cases).
 
     Returns:
-        Liste de dicts {label, path, type, tmp?}.
+        List of dicts {label, path, type, tmp?}.
     """
     tests   = []
     base_sr = 22050
 
-    # Cas 1 : fichier original fourni tel quel
+    # Case 1: Original file provided as is
     if os.path.exists(audio_path):
         tests.append({"label": "CLEAN  | original", "path": audio_path, "type": "real"})
     else:
         print(f"{RED}  [ERREUR] Fichier introuvable : {audio_path}{RESET}")
         return tests
 
-    # Chargement pour générer les dégradations simulées
+    # Loading for generating simulated degradations
     try:
         waveform, sr = librosa.load(audio_path, sr=base_sr, mono=True)
     except Exception as e:
@@ -232,7 +232,7 @@ def build_test_suite(audio_path: str, full: bool = False) -> list[dict]:
 
 def run_identification(audio_path: str, target_track_id: str | None,
                        method: str | None = None) -> dict:
-    """Lance identify_track et extrait les métriques clés."""
+    """Runs identify_track and extracts the key metrics."""
     from src.retrieval.query_pipeline import identify_track
 
     t0 = time.time()
@@ -289,7 +289,7 @@ def run_identification(audio_path: str, target_track_id: str | None,
 
 
 # ---------------------------------------------------------------------------
-# Affichage
+# Display
 # ---------------------------------------------------------------------------
 
 def rank_color(rank):
@@ -329,7 +329,7 @@ def print_header():
 
 
 # ---------------------------------------------------------------------------
-# Points d'entrée publics
+# Public entry points
 # ---------------------------------------------------------------------------
 
 def run_benchmark(
@@ -338,45 +338,45 @@ def run_benchmark(
     full: bool = False,
 ) -> dict:
     """
-    Lance le benchmark de robustesse sur un fichier audio et sauvegarde les résultats.
+    Runs the robustness benchmark on an audio file and saves the results.
 
-    Le track cible est auto-détecté depuis data/raw/manifest.json.
-    La méthode d'embedding est lue depuis src/config.py (EMBEDDING_METHOD).
+    The target track is automatically detected from data/raw/manifest.json.
+    The embedding method is read from src/config.py (EMBEDDING_METHOD).
 
     Args:
-        audio:     chemin vers le fichier audio de test (doit être dans le manifest).
-        label_run: nom du run pour la traçabilité.
-        full:      si True, exécute ~10 cas (défaut : 4 cas).
+        audio:     path to the test audio file (must be in the manifest).
+        label_run: name of the run for traceability.
+        full:      if True, executes ~10 cases (default : 4 cases).
 
     Returns:
-        Dict avec les résultats complets du run.
+        Dict with the complete results of the run.
     """
     import src.config as config
 
     target_track_id, target_label = _lookup_target(audio)
     method = config.EMBEDDING_METHOD
-    mode_str = "MODE COMPLET (~10 cas)" if full else "MODE RAPIDE (4 cas)"
+    mode_str = "COMPLETE MODE (~10 cases)" if full else "FAST MODE (4 cases)"
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{BOLD}{CYAN}{'═'*90}{RESET}")
     print(f"{BOLD}{CYAN}  BENCHMARK — {label_run}  [{mode_str}]{RESET}")
-    print(f"{BOLD}{CYAN}  Méthode      : {method.upper()}{RESET}")
-    print(f"{BOLD}{CYAN}  Fichier test : {Path(audio).name}{RESET}")
+    print(f"{BOLD}{CYAN}  Method    : {method.upper()}{RESET}")
+    print(f"{BOLD}{CYAN}  Test file : {Path(audio).name}{RESET}")
     if target_track_id:
-        print(f"{BOLD}{CYAN}  Track cible  : {target_label} ({target_track_id}){RESET}")
+        print(f"{BOLD}{CYAN}  Target track  : {target_label} ({target_track_id}){RESET}")
     else:
-        print(f"{YELLOW}  Track cible  : non trouvé dans le manifest — rang non calculé{RESET}")
-        print(f"{YELLOW}  Lance d'abord : python manage.py download-test \"<artiste titre>\"{RESET}")
+        print(f"{YELLOW}  Target track : not found in the manifest — rank not calculated{RESET}")
+        print(f"{YELLOW}  Run first    : python manage.py download-test \"<artist title>\"{RESET}")
     print(f"{BOLD}{CYAN}  Date         : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
     print(f"{BOLD}{CYAN}{'═'*90}{RESET}")
 
     tests = build_test_suite(audio_path=audio, full=full)
     if not tests:
-        print(f"{RED}  Aucun fichier de test généré.{RESET}")
+        print(f"{RED}  No test files generated.{RESET}")
         return {}
 
-    print(f"\n  {len(tests)} cas de test à exécuter...")
+    print(f"\n  {len(tests)} test cases to execute...")
     print_header()
 
     all_results = {}
@@ -395,7 +395,7 @@ def run_benchmark(
         except Exception:
             pass
 
-    print(f"\n{BOLD}  Récapitulatif :{RESET}")
+    print(f"\n{BOLD}  Summary :{RESET}")
     success = [r for r in all_results.values() if r.get("top1_is_target")]
     total   = len(all_results)
     if target_track_id:
@@ -432,17 +432,17 @@ def run_benchmark(
     json_path  = RESULTS_DIR / f"benchmark_{ts}_{safe_label}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"\n  Résultats sauvegardés → {json_path}")
+    print(f"\n   Results saved → {json_path}")
 
     return out
 
 
 def run_compare(json_paths: list[str]) -> None:
     """
-    Affiche un tableau comparatif de plusieurs runs.
+    Displays a comparison table of several runs.
 
     Args:
-        json_paths: liste de chemins vers des fichiers JSON de résultats.
+        json_paths: list of paths to JSON result files.
     """
     runs = []
     for p in json_paths:
@@ -460,7 +460,7 @@ def run_compare(json_paths: list[str]) -> None:
     lbl_w     = 48
 
     print(f"\n{'─'*90}")
-    print(f"  COMPARAISON ENTRE RUNS")
+    print(f"  COMPARISON BETWEEN RUNS")
     print(f"{'─'*90}")
     header = f"  {'LABEL'.ljust(lbl_w)}" + "".join(f"  {n[:col_w].center(col_w)}" for n in run_names)
     print(header)
@@ -484,7 +484,7 @@ def run_compare(json_paths: list[str]) -> None:
     for run in runs:
         pct = run["summary"].get("top1_accuracy_pct")
         if pct is None:
-            print(f"    {run['run_label']:30s} : (pas de target connu)")
+            print(f"    {run['run_label']:30s} : (no known target)")
             continue
         col = GREEN if pct >= 80 else (YELLOW if pct >= 50 else RED)
         print(

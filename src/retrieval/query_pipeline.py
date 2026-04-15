@@ -1,13 +1,13 @@
 """
 src/retrieval/query_pipeline.py
 
-Pipeline complet d'identification d'un morceau à partir d'un extrait audio.
-Orchestre : chargement audio → embeddings → FAISS → re-ranking fingerprint.
+Complete pipeline to identify a track from an audio excerpt.
+Orchestrates: audio loading → embeddings → FAISS → fingerprint re-ranking.
 
-Stratégie de classement final (cascade) :
-  - Clé primaire   : score fingerprint (DESC) — source de vérité
-  - Clé secondaire : score FAISS (DESC)       — fallback si FP=0 pour tous
-Aucun mélange des deux scores : le FP décide seul quand il a un signal.
+Final ranking strategy (cascading):
+  - Primary key   : fingerprint score (DESC) — source of truth
+  - Secondary key : FAISS score (DESC)       — fallback if FP=0 for all
+No mixing of both scores: FP alone decides when it has a signal.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import sqlite3
 from collections import OrderedDict
 from pathlib import Path
 
-# Active le fallback CPU pour les opérations non supportées sur MPS (Apple Silicon).
-# Sans effet sur les autres machines (CUDA, CPU).
+# Enables CPU fallback for operations unsupported on MPS (Apple Silicon).
+# No effect on other machines (CUDA, CPU).
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import librosa
@@ -43,7 +43,7 @@ _FINGERPRINT_DB_MTIME_NS: int | None = None
 
 
 def _enforce_fingerprint_cache_limit(cache: OrderedDict[str, set]) -> None:
-    """Conserve au plus FINGERPRINT_CACHE_MAX fingerprints récents en mémoire."""
+    """Keeps at most FINGERPRINT_CACHE_MAX recent fingerprints in memory."""
     max_size = max(0, int(getattr(config, "FINGERPRINT_CACHE_MAX", 256)))
     if max_size == 0:
         cache.clear()
@@ -53,7 +53,7 @@ def _enforce_fingerprint_cache_limit(cache: OrderedDict[str, set]) -> None:
 
 
 def load_fingerprint_cache(force_reload: bool = False) -> OrderedDict[str, set]:
-    """Initialise/retourne le cache mémoire des fingerprints, rempli à la demande."""
+    """Initializes/returns the in-memory fingerprint cache, populated on demand."""
     global _FINGERPRINT_CACHE, _FINGERPRINT_DB_MTIME_NS
 
     fp_db = ROOT / config.FINGERPRINTS_DB
@@ -73,10 +73,10 @@ def load_fingerprint_cache(force_reload: bool = False) -> OrderedDict[str, set]:
 
 def warmup_fingerprint_store() -> dict[str, int | bool]:
     """
-    Prépare la couche fingerprints sans charger les 2+ Go de blobs en RAM.
+    Prepares the fingerprint layer without loading 2+ GB of blobs into RAM.
 
-    On initialise le cache mémoire vide et on force un accès SQLite très léger
-    pour éviter que le premier identify paie aussi ce coût d'ouverture.
+    Initializes the empty memory cache and forces a very lightweight SQLite access
+    to prevent the first identify call from also paying this opening cost.
     """
     cache = load_fingerprint_cache()
     fp_db = ROOT / config.FINGERPRINTS_DB
@@ -94,7 +94,7 @@ def warmup_fingerprint_store() -> dict[str, int | bool]:
 
 
 def get_cached_fingerprint(track_id: str) -> set | None:
-    """Retourne le fingerprint d'un track depuis le cache mémoire ou SQLite."""
+    """Returns a track's fingerprint from the memory cache or SQLite."""
     cache = load_fingerprint_cache()
     if track_id in cache:
         fingerprint = cache.pop(track_id)
@@ -122,35 +122,35 @@ def identify_track(
     detailed: bool = False,
 ) -> list[tuple]:
     """
-    Identifie le morceau correspondant à un fichier audio.
+    Identifies the track corresponding to an audio file.
 
-    Pipeline en deux étapes :
-    - Stage 1 (Embeddings + FAISS) : filtre les N candidats les plus proches
-      dans l'index vectoriel. Rapide mais approximatif — rôle de recall.
-    - Stage 2 (Fingerprinting) : classe les candidats par correspondance exacte
-      des pics spectraux + alignement temporel. Précis — rôle de precision.
+    Two-stage pipeline:
+    - Stage 1 (Embeddings + FAISS): filters the N closest candidates
+      in the vector index. Fast but approximate — recall role.
+    - Stage 2 (Fingerprinting): ranks candidates by exact match
+      of spectral peaks + temporal alignment. Precise — precision role.
 
-    Classement final en cascade :
-      1. score_fp  DESC  — le fingerprint décide (source de vérité)
-      2. score_faiss DESC — fallback si FP=0 pour tous (audio trop dégradé)
-    Aucun mélange des deux scores : le FP prime toujours quand il a un signal.
+    Cascading final ranking:
+      1. score_fp   DESC — fingerprint decides (source of truth)
+      2. score_faiss DESC — fallback if FP=0 for all (audio too degraded)
+    No mixing of both scores: FP always prevails when it has a signal.
 
     Args:
-        audio_path: chemin vers le fichier audio à identifier.
-        method:     méthode d'embedding — None utilise config.EMBEDDING_METHOD.
-        top_n:      nombre de résultats finaux à retourner.
-        detailed:   si True, retourne
+        audio_path: path to the audio file to identify.
+        method:     embedding method — None uses config.EMBEDDING_METHOD.
+        top_n:      number of final results to return.
+        detailed:   if True, returns
                     (track_id, score_final, score_faiss, score_fp)
-                    au lieu de (track_id, score_final).
+                    instead of (track_id, score_final).
 
     Returns:
-        Si detailed=False : [(track_id, score_final), ...]
-        Si detailed=True  : [(track_id, score_final, score_faiss, score_fp), ...]
+        If detailed=False : [(track_id, score_final), ...]
+        If detailed=True  : [(track_id, score_final, score_faiss, score_fp), ...]
     """
     if method is None:
-        method = config.EMBEDDING_METHOD # Si pas de méthode donnée on utilise celle du config.
+        method = config.EMBEDDING_METHOD # If no method is given, use the config one.
 
-    # On prend la valeur du Sample Rate idéale en fonction de la méthode utilisé :
+    # We take the ideal Sample Rate value based on the method used:
     if method == "clap":
         targ_sr = config.CLAP_SAMPLE_RATE
     elif method == "muq":
@@ -158,20 +158,20 @@ def identify_track(
     else:
         targ_sr = config.SAMPLE_RATE
 
-    # ---------- Stage 1 (Embeddings + FAISS) : ----------
+    # ---------- Stage 1 (Embeddings + FAISS): ----------
 
-    index, segments = load_searcher(method) # Charge l'index FAISS et le .parquet pour la correspondance.
+    index, segments = load_searcher(method) # Load the FAISS index and the .parquet for matching.
 
-    waveform, sr = load_audio(path=audio_path, target_sr=targ_sr)  # Chargement de l'audio.
-    waveform = preprocess_query(waveform, sr)                       # Prétraitement : HP 80Hz + LUFS -14 + peak norm
+    waveform, sr = load_audio(path=audio_path, target_sr=targ_sr)       # Load audio.
+    waveform = preprocess_query(waveform, sr)                           # Preprocessing: HP 80Hz + LUFS -14 + peak norm
 
-    # Découpage de l'audio en segments
+    # Split the audio into segments
     segment_list = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
 
-    all_results = [] # Stockage des résultats FAISS pour chaque segment.
+    all_results = [] # FAISS results storage for each segment.
 
     if config.OPT_BATCH_EMBED and method == "muq":
-        # Batch embedding : traitement par groupes de MUQ_BATCH_SIZE segments
+        # Batch embedding: process in groups of MUQ_BATCH_SIZE segments
         batch_size = config.MUQ_BATCH_SIZE
         for i in range(0, len(segment_list), batch_size):
             batch = segment_list[i:i + batch_size]
@@ -180,7 +180,7 @@ def identify_track(
                 distances, indices = search_segments(index=index, query_embedding=embedding, k=config.VECTOR_TOP_K_SEGMENTS)
                 all_results.append((distances, indices))
     else:
-        # Embedding segment par segment (comportement de base)
+        # Segment-by-segment embedding (default behavior)
         for segment in segment_list:
             embedding = embed_segment(
                 waveform=segment,
@@ -193,19 +193,18 @@ def identify_track(
             distances, indices = search_segments(index=index, query_embedding=embedding, k=config.VECTOR_TOP_K_SEGMENTS)
             all_results.append((distances, indices))
 
-    global_scores = {} # Dictionnaire global : track_id → score cumulé sur tous les segments.
+    global_scores = {} # Global dictionary: track_id → cumulative score over all segments.
 
-    for distances, indices in all_results:                          # Pour chaque segment de l'audio que l'on cherche.
-        partial = aggregate_by_track(indices, distances, segments)  # Traduction les indices FAISS en track_id et agréger
-        for track_id, score in partial:                             # Pour chaque morceau trouvé par ce segment
-            global_scores[track_id] = global_scores.get(track_id, 0.0) + score # Ajouter son score au total global
+    for distances, indices in all_results:                                  # For each segment of the queried audio.
+        partial = aggregate_by_track(indices, distances, segments)          # Translate FAISS indices into track_id and aggregate
+        for track_id, score in partial:                                     # For each track found by this segment
+            global_scores[track_id] = global_scores.get(track_id, 0.0) + score # Add its score to the global total
 
     candidates = sorted(global_scores.items(), key=lambda x: x[1], reverse=True)[:config.VECTOR_TOP_N_TRACKS]
 
+    # ---------- Stage 2 (Fingerprinting): ----------
 
-    # ---------- Stage 2 (Fingerprinting) : ----------
-
-    # Calcul du fingerprint de la requête — toujours à SAMPLE_RATE pour cohérence avec les fingerprints stockés
+    # Compute query fingerprint — always at SAMPLE_RATE for consistency with stored fingerprints
     if targ_sr != config.SAMPLE_RATE:
         waveform_fp = librosa.resample(waveform, orig_sr=targ_sr, target_sr=config.SAMPLE_RATE)
     else:
@@ -213,25 +212,25 @@ def identify_track(
     query_fp = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
 
     def process_candidate(candidate):
-        """Récupère le fingerprint d'un candidat et retourne ses scores détaillés."""
+        """Retrieves a candidate's fingerprint and returns its detailed scores."""
         track_id, score_faiss = candidate
         candidate_fp = get_cached_fingerprint(track_id)
         if candidate_fp is None or len(candidate_fp) == 0:
-            # Fingerprint manquant ou vide : score FP à 0, FAISS servira de fallback.
+            # Missing or empty fingerprint: FP score to 0, FAISS will act as fallback.
             return (track_id, score_faiss, 0.0)
         score_fp = fingerprint_similarity(query_fp, candidate_fp)
         return (track_id, score_faiss, score_fp)
 
     if config.OPT_FINGERPRINT_PARALLEL:
-        # Calcul des similarités fingerprint en parallèle (CPU-bound)
+        # Compute fingerprint similarities in parallel (CPU-bound)
         with ThreadPoolExecutor(max_workers=4) as executor:
             scored = list(executor.map(process_candidate, candidates))
     else:
         scored = [process_candidate(c) for c in candidates]
 
-    # ── Classement final en cascade ──────────────────────────────────────────
-    # Clé primaire   : score_fp  (DESC) — le fingerprint est la source de vérité
-    # Clé secondaire : score_faiss (DESC) — fallback si FP=0 pour tous les candidats
+    # ── Cascading final ranking ──────────────────────────────────────────────
+    # Primary key   : score_fp   (DESC) — fingerprint is the source of truth
+    # Secondary key : score_faiss (DESC) — fallback if FP=0 for all candidates
     scored.sort(key=lambda x: (x[2], x[1]), reverse=True)
 
     top = scored[:top_n]

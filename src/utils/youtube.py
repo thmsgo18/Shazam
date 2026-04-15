@@ -1,8 +1,8 @@
 """
 src/utils/youtube.py
 
-Utilitaires de téléchargement audio via yt-dlp.
-Partagés entre l'ingestion, la reconstruction des fingerprints et l'augmentation RIR.
+Audio download utilities via yt-dlp.
+Shared between ingestion, fingerprint reconstruction and RIR augmentation.
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Helpers processus
+# Process helpers
 # ---------------------------------------------------------------------------
 
 def kill_proc(proc: subprocess.Popen) -> None:
-    """Tue un subprocess proprement (groupe de processus Unix, kill Windows)."""
+    """Kills a subprocess cleanly (Unix process group, Windows kill)."""
     if sys.platform == "win32":
         proc.kill()
     else:
@@ -33,7 +33,7 @@ def kill_proc(proc: subprocess.Popen) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Téléchargement par recherche (yt-dlp ytsearch)
+# Download by search (yt-dlp ytsearch)
 # ---------------------------------------------------------------------------
 
 def download_audio_search(
@@ -43,17 +43,17 @@ def download_audio_search(
     stop_event=None,
 ) -> tuple[str, str, str, None] | tuple[None, None, None, str]:
     """
-    Télécharge l'audio en cherchant "{artist} {title}" sur YouTube.
+    Downloads audio by searching "{artist} {title}" on YouTube.
 
-    Retourne :
-        (tmpdir, mp3_path, youtube_url, None)  — succès
-        (None,   None,     None,        raison) — échec
+    Returns:
+        (tmpdir, mp3_path, youtube_url, None)  — success
+        (None,   None,     None,        reason) — failure
 
     Args:
-        artist:      artiste du morceau.
-        title:       titre du morceau.
-        retries:     nombre de tentatives par requête.
-        stop_event:  threading.Event facultatif (arrêt propre Ctrl+C).
+        artist:     track artist.
+        title:      track title.
+        retries:    number of attempts per query.
+        stop_event: optional threading.Event (clean stop Ctrl+C).
     """
     queries = [
         f"{artist} {title} official audio",
@@ -69,11 +69,11 @@ def download_audio_search(
         "--cookies-from-browser", "chrome",
         "--remote-components", "ejs:github",
     ]
-    last_reason = "introuvable sur YouTube"
+    last_reason = "not found on YouTube"
 
     for query in queries:
         if stop_event and stop_event.is_set():
-            return None, None, None, "arrêt demandé"
+            return None, None, None, "stop requested"
         cmd = [base_cmd[0], f"ytsearch1:{query}"] + base_cmd[1:]
         for attempt in range(retries):
             tmpdir = tempfile.mkdtemp()
@@ -101,12 +101,12 @@ def download_audio_search(
                     shutil.rmtree(tmpdir, ignore_errors=True)
                     stderr = stderr_bytes.decode(errors="ignore")
                     if "Sign in" in stderr or "age" in stderr:
-                        last_reason = "restriction d'âge YouTube"
+                        last_reason = "YouTube age restriction"
                         break
                     if "unavailable" in stderr or "not available" in stderr:
-                        last_reason = "vidéo indisponible dans cette région"
+                        last_reason = "video unavailable in this region"
                         break
-                    last_reason = "erreur yt-dlp"
+                    last_reason = "yt-dlp error"
                     if attempt < retries - 1:
                         time.sleep(3)
                         continue
@@ -115,7 +115,7 @@ def download_audio_search(
                 files = list(Path(tmpdir).glob("*.mp3"))
                 if not files:
                     shutil.rmtree(tmpdir, ignore_errors=True)
-                    last_reason = "introuvable sur YouTube"
+                    last_reason = "not found on YouTube"
                     break
 
                 youtube_url = f"https://www.youtube.com/watch?v={files[0].stem}"
@@ -135,7 +135,7 @@ def download_audio_search(
 
 
 # ---------------------------------------------------------------------------
-# Téléchargement depuis une URL YouTube directe
+# Download from direct YouTube URL
 # ---------------------------------------------------------------------------
 
 def download_audio_from_url(
@@ -144,16 +144,16 @@ def download_audio_from_url(
     stop_event=None,
 ) -> tuple[str, str] | tuple[None, None]:
     """
-    Télécharge l'audio depuis une URL YouTube directe.
+    Downloads audio from a direct YouTube URL.
 
-    Retourne :
-        (tmpdir, mp3_path) — succès
-        (None, None)       — échec
+    Returns:
+        (tmpdir, mp3_path) — success
+        (None, None)       — failure
 
     Args:
-        url:        URL YouTube directe.
-        retries:    nombre de tentatives.
-        stop_event: threading.Event facultatif (arrêt propre Ctrl+C).
+        url:        direct YouTube URL.
+        retries:    number of attempts.
+        stop_event: optional threading.Event (clean stop Ctrl+C).
     """
     cmd = [
         "yt-dlp", url,
@@ -201,16 +201,16 @@ def download_audio_from_url(
 
 
 # ---------------------------------------------------------------------------
-# Chargement audio sans deadlock (macOS)
+# Audio loading without deadlock (macOS)
 # ---------------------------------------------------------------------------
 
 def load_audio_safe(mp3_path: str, sr: int):
     """
-    Charge un MP3 sans deadlock macOS :
-      ffmpeg convertit MP3 → WAV mono (subprocess propre, pas de threads internes)
-      soundfile lit le WAV (thread-safe, pas d'OpenBLAS)
+    Loads an MP3 without macOS deadlock:
+      ffmpeg converts MP3 → mono WAV (clean subprocess, no internal threads)
+      soundfile reads the WAV (thread-safe, no OpenBLAS)
 
-    Retourne np.ndarray float32 ou None si erreur.
+    Returns float32 np.ndarray or None on error.
     """
     import numpy as np
     import soundfile as sf

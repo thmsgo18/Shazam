@@ -1,14 +1,14 @@
 """
 src/evaluation/rir_impact.py
 
-Mesure l'impact des RIR sur le score FAISS SANS supprimer la base.
+Measure the impact of RIR on FAISS score WITHOUT deleting the database.
 
-Stratégie :
-  - Charge uniquement les vecteurs originaux (sans _rir_) depuis ChromaDB
-  - Construit un index FAISS temporaire en mémoire (pas de fichier)
-  - Compare la position du track cible AVEC et SANS RIR dans l'index
+Strategy:
+  - Load only original vectors (without _rir_) from ChromaDB
+  - Build a temporary FAISS index in memory (no file)
+  - Compare the target track position WITH and WITHOUT RIR in the index
 
-Point d'entrée public : run_rir_impact(audio, target_track_id, top, method)
+Public entry point: run_rir_impact(audio, target_track_id, top, method)
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ PAGE          = 500
 
 def _load_no_rir_index(collection_key: str):
     """
-    Charge uniquement les vecteurs NON-RIR depuis ChromaDB et construit
-    un index FAISS en mémoire + DataFrame segments.
+    Load only NON-RIR vectors from ChromaDB and build
+    a FAISS index in memory + DataFrame segments.
     """
     client     = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
     collection = client.get_collection(name=collection_key)
@@ -83,25 +83,25 @@ def _load_no_rir_index(collection_key: str):
                 break
             offset += PAGE
 
-    console.print(f"  {len(embeddings_list):,} vecteurs originaux chargés (sur {total:,} total)")
+    console.print(f"  {len(embeddings_list):,} original vectors loaded (out of {total:,} total)")
 
-    console.print("  Conversion en array numpy…")
+    console.print("  Converting to numpy array…")
     xb = np.array(embeddings_list, dtype=np.float32)
     del embeddings_list
 
-    console.print(f"  Array shape : {xb.shape} — normalisation L2…")
+    console.print(f"  Array shape: {xb.shape} — L2 normalization…")
     norms = np.linalg.norm(xb, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     xb   /= norms
 
-    console.print("  Construction index FAISS…")
+    console.print("  Building FAISS index…")
     faiss.omp_set_num_threads(1)
     index = faiss.IndexFlatIP(xb.shape[1])
     index.add(xb)
     del xb
     del norms
     gc.collect()
-    console.print(f"  [green]✓ Index prêt ({index.ntotal:,} vecteurs)[/green]\n")
+    console.print(f"  [green]✓ Index ready ({index.ntotal:,} vectors)[/green]\n")
 
     segments = pd.DataFrame(metadatas_list)
     return index, segments
@@ -118,33 +118,33 @@ def _no_rir_index_paths(collection_key: str) -> tuple[Path, Path]:
 
 def load_no_rir_index_cached(collection_key: str, force_rebuild: bool = False) -> tuple[faiss.Index, pd.DataFrame]:
     """
-    Charge l'index SANS RIR depuis un cache disque si disponible.
-    Sinon le construit depuis ChromaDB, puis le sauvegarde.
+    Load the WITHOUT RIR index from disk cache if available.
+    Otherwise build it from ChromaDB, then save it.
     """
     if not force_rebuild and collection_key in _NO_RIR_CACHE:
         return _NO_RIR_CACHE[collection_key]
 
     index_path, seg_path = _no_rir_index_paths(collection_key)
     if not force_rebuild and index_path.exists() and seg_path.exists():
-        console.print("[yellow]Chargement de l'index SANS RIR depuis le disque…[/yellow]")
+        console.print("[yellow]Loading WITHOUT RIR index from disk…[/yellow]")
         index = faiss.read_index(str(index_path))
         segments = pd.read_parquet(seg_path)
-        console.print(f"  [green]✓ Index SANS RIR chargé ({index.ntotal:,} vecteurs)[/green]\n")
+        console.print(f"  [green]✓ WITHOUT RIR index loaded ({index.ntotal:,} vectors)[/green]\n")
         _NO_RIR_CACHE[collection_key] = (index, segments)
         return _NO_RIR_CACHE[collection_key]
 
-    console.print("[yellow]Construction de l'index SANS RIR…[/yellow]")
+    console.print("[yellow]Building WITHOUT RIR index…[/yellow]")
     index, segments = _load_no_rir_index(collection_key)
-    console.print("[yellow]Sauvegarde de l'index SANS RIR…[/yellow]")
+    console.print("[yellow]Saving WITHOUT RIR index…[/yellow]")
     faiss.write_index(index, str(index_path))
     segments.to_parquet(seg_path, index=False)
-    console.print(f"  [green]✓ Cache disque SANS RIR écrit[/green]\n")
+    console.print(f"  [green]✓ WITHOUT RIR disk cache written[/green]\n")
     _NO_RIR_CACHE[collection_key] = (index, segments)
     return _NO_RIR_CACHE[collection_key]
 
 
 def _search(index, segments: pd.DataFrame, query_emb: np.ndarray, k: int) -> dict[str, float]:
-    """Recherche FAISS + agrégation par track_id."""
+    """FAISS search + aggregation by track_id."""
     q = query_emb.reshape(1, -1).astype(np.float32)
     q /= np.linalg.norm(q, keepdims=True).clip(min=1e-10)
     dists, idxs = index.search(q, k)
@@ -171,7 +171,7 @@ def _rank_label(rank: int | None) -> str:
 
 
 def _load_model(method: str, verbose: bool = True) -> None:
-    """Charge le modèle AVANT faiss (Apple Silicon)."""
+    """Load the model BEFORE faiss (Apple Silicon)."""
     if method == "clap":
         from src.features.embeddings_audio import _CLAP_CACHE, _load_clap
         already_loaded = (
@@ -192,7 +192,7 @@ def _load_model(method: str, verbose: bool = True) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_rir_impact(
@@ -202,16 +202,16 @@ def run_rir_impact(
     method:          str | None = None,
 ) -> None:
     """
-    Compare la position du track cible AVEC et SANS vecteurs RIR dans l'index.
+    Compare the target track position WITH and WITHOUT RIR vectors in the index.
 
     Args:
-        audio:           chemin vers le fichier audio à tester.
-        target_track_id: track_id à suivre (défaut : Flowers).
-        top:             nombre de résultats dans les tableaux.
-        method:          méthode d'embedding (défaut : config.EMBEDDING_METHOD).
+        audio:           path to the audio file to test.
+        target_track_id: track_id to track (default: Flowers).
+        top:             number of results in the tables.
+        method:          embedding method (default: config.EMBEDDING_METHOD).
     """
     if not Path(audio).exists():
-        console.print(f"[red]Fichier introuvable : {audio}[/red]")
+        console.print(f"[red]File not found: {audio}[/red]")
         sys.exit(1)
 
     if method is None:
@@ -225,22 +225,22 @@ def run_rir_impact(
     }.get(method, config.SAMPLE_RATE)
 
     console.print(Panel(
-        f"[bold]Méthode  :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Method  :[/bold] [cyan]{method}[/cyan]\n"
         f"[bold]Audio    :[/bold] [cyan]{audio}[/cyan]\n"
-        f"[bold]But      :[/bold] comparer FAISS avec vs sans vecteurs RIR",
-        title="[bold cyan]Test impact RIR[/bold cyan]",
+        f"[bold]Goal     :[/bold] compare FAISS with vs without RIR vectors",
+        title="[bold cyan]RIR Impact Test[/bold cyan]",
         expand=False,
     ))
 
-    # Chargement modèle AVANT faiss (Apple Silicon)
+    # Load model BEFORE faiss (Apple Silicon)
     _load_model(method, verbose=False)
 
-    # Embeddings de la requête
-    console.print("[yellow]Préparation de la requête audio…[/yellow]")
+    # Embeddings of the query
+    console.print("[yellow]Preparing audio query…[/yellow]")
     waveform, sr = load_audio(audio, target_sr=targ_sr)
     waveform     = preprocess_query(waveform, sr)
     seg_list     = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
-    console.print(f"  {len(seg_list)} segments à embedder\n")
+    console.print(f"  {len(seg_list)} segments to embed\n")
 
     query_embeddings = []
     for seg in seg_list:
@@ -252,17 +252,17 @@ def run_rir_impact(
         )
         query_embeddings.append(emb)
 
-    # Index SANS RIR (en mémoire)
+    # Index WITHOUT RIR (in memory)
     index_no_rir, segments_no_rir = load_no_rir_index_cached(collection_key)
-    console.print(f"  Index sans RIR : [white]{index_no_rir.ntotal:,}[/white] vecteurs\n")
+    console.print(f"  Index without RIR: [white]{index_no_rir.ntotal:,}[/white] vectors\n")
 
-    # Index AVEC RIR (fichier existant)
-    console.print("[yellow]Chargement de l'index AVEC RIR…[/yellow]")
+    # Index WITH RIR (existing file)
+    console.print("[yellow]Loading index WITH RIR…[/yellow]")
     from src.retrieval.searcher import load_searcher
     index_rir, segments_rir = load_searcher(method)
-    console.print(f"  Index avec RIR : [white]{index_rir.ntotal:,}[/white] vecteurs\n")
+    console.print(f"  Index with RIR: [white]{index_rir.ntotal:,}[/white] vectors\n")
 
-    # Recherche sur les deux index
+    # Search across both indexes
     k = config.VECTOR_TOP_K_SEGMENTS
 
     scores_no_rir: dict[str, float] = {}
@@ -282,41 +282,41 @@ def run_rir_impact(
     score_no_rir = scores_no_rir.get(target_track_id, 0.0)
     score_rir    = scores_rir.get(target_track_id, 0.0)
 
-    # Résultat
-    console.rule("[bold]Résultat Stage 1 — FAISS")
+    # Result
+    console.rule("[bold]Stage 1 Result — FAISS")
 
     t = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
     t.add_column("Condition",        width=20)
-    t.add_column("Position cible",  width=18)
-    t.add_column("Score FAISS",     justify="right", width=12)
-    t.add_column("Vecteurs index",  justify="right", width=15)
+    t.add_column("Target Position",  width=18)
+    t.add_column("FAISS Score",     justify="right", width=12)
+    t.add_column("Index Vectors",  justify="right", width=15)
 
-    t.add_row("Sans RIR", _rank_label(rank_no_rir), f"{score_no_rir:.4f}", f"{index_no_rir.ntotal:,}")
-    t.add_row("Avec RIR", _rank_label(rank_rir),    f"{score_rir:.4f}",    f"{index_rir.ntotal:,}")
+    t.add_row("Without RIR", _rank_label(rank_no_rir), f"{score_no_rir:.4f}", f"{index_no_rir.ntotal:,}")
+    t.add_row("With RIR", _rank_label(rank_rir),    f"{score_rir:.4f}",    f"{index_rir.ntotal:,}")
     console.print(t)
 
     if rank_rir is not None and rank_no_rir is not None:
         delta = rank_no_rir - rank_rir
         if delta > 0:
-            console.print(f"\n[green]✓ Les RIR améliorent de {delta} positions ({rank_no_rir} → {rank_rir})[/green]")
+            console.print(f"\n[green]✓ RIR improves by {delta} positions ({rank_no_rir} → {rank_rir})[/green]")
         elif delta < 0:
-            console.print(f"\n[red]✗ Les RIR dégradent de {abs(delta)} positions ({rank_no_rir} → {rank_rir})[/red]")
+            console.print(f"\n[red]✗ RIR degrades by {abs(delta)} positions ({rank_no_rir} → {rank_rir})[/red]")
         else:
-            console.print(f"\n[yellow]= Les RIR n'ont pas d'impact sur la position ({rank_rir})[/yellow]")
+            console.print(f"\n[yellow]= RIR has no impact on position ({rank_rir})[/yellow]")
     console.print()
 
-    # ── Données structurées (utiles pour run_rir_evaluate) ──────────────────
+    # ── Structured data (useful for run_rir_evaluate) ──────────────────
     run_rir_impact._last_result = {
         "with_rir":    {"rank": rank_rir,    "faiss_score": round(score_rir,    4), "n_vectors": index_rir.ntotal},
         "without_rir": {"rank": rank_no_rir, "faiss_score": round(score_no_rir, 4), "n_vectors": index_no_rir.ntotal},
     }
 
-    # Top-N des deux index pour comparaison
+    # Top-N of both indices for comparison
     meta_path = ROOT / config.METADATA_PATH
     meta_df   = pd.read_parquet(meta_path, columns=["track_id", "title", "artist"])
     meta      = {r.track_id: f"{r.artist[:18]} — {r.title[:25]}" for r in meta_df.itertuples()}
 
-    for label_str, ranked in [("Sans RIR", ranked_no_rir), ("Avec RIR", ranked_rir)]:
+    for label_str, ranked in [("Without RIR", ranked_no_rir), ("With RIR", ranked_rir)]:
         console.rule(f"[dim]Top {top} — {label_str}")
         t2 = Table(show_header=True, header_style="bold", box=box.SIMPLE)
         t2.add_column("#",     width=4, style="dim")
@@ -334,7 +334,7 @@ def run_rir_impact(
             style = "[bold green]" if is_target else ""
             t2.add_row(
                 f"{style}#{rank}[/bold green]" if is_target else f"#{rank}",
-                f"{style}{meta.get(tid, tid)}{'  ← 🎯 CIBLE' if is_target else ''}",
+                f"{style}{meta.get(tid, tid)}{'  ← 🎯 TARGET' if is_target else ''}",
                 f"{score:.4f}",
             )
             if is_target:
@@ -344,7 +344,7 @@ def run_rir_impact(
 
 
 # ---------------------------------------------------------------------------
-# API silencieuse pour run_rir_evaluate (pas d'affichage)
+# Silent API for run_rir_evaluate (no display)
 # ---------------------------------------------------------------------------
 
 def rir_impact_scores(
@@ -354,14 +354,14 @@ def rir_impact_scores(
     prebuilt_no_rir: tuple | None = None,
 ) -> dict:
     """
-    Compare Stage 1 FAISS scores pour un fichier audio : avec vs sans RIR.
-    Ne produit aucun affichage — retourne des données structurées.
+    Compare Stage 1 FAISS scores for an audio file: with vs without RIR.
+    Produces no display — returns structured data.
 
     Args:
-        audio_path:       chemin vers le fichier audio (WAV temporaire accepté).
-        track_id:         track_id attendu comme bonne réponse.
-        method:           méthode d'embedding (défaut : config.EMBEDDING_METHOD).
-        prebuilt_no_rir:  (index, segments) déjà construit — optimisation multi-tracks.
+        audio_path:       path to the audio file (temporary WAV accepted).
+        track_id:         track_id expected as correct answer.
+        method:           embedding method (default: config.EMBEDDING_METHOD).
+        prebuilt_no_rir:  (index, segments) already built — multi-track optimization.
 
     Returns:
         {
@@ -379,10 +379,10 @@ def rir_impact_scores(
         "mert": config.MERT_SAMPLE_RATE,
     }.get(method, config.SAMPLE_RATE)
 
-    # Chargement du modèle AVANT faiss (Apple Silicon)
+    # Load the model BEFORE faiss (Apple Silicon)
     _load_model(method, verbose=False)
 
-    # Embedding des segments de la requête
+    # Embedding the query segments
     waveform, sr = load_audio(audio_path, target_sr=targ_sr)
     waveform     = preprocess_query(waveform, sr)
     seg_list     = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
@@ -397,13 +397,13 @@ def rir_impact_scores(
         )
         query_embeddings.append(emb)
 
-    # Index SANS RIR
+    # WITHOUT RIR Index
     if prebuilt_no_rir is not None:
         index_no_rir, segments_no_rir = prebuilt_no_rir
     else:
         index_no_rir, segments_no_rir = load_no_rir_index_cached(collection_key)
 
-    # Index AVEC RIR (fichier existant sur disque)
+    # WITH RIR Index (existing file on disk)
     from src.retrieval.searcher import load_searcher
     index_rir, segments_rir = load_searcher(method)
 

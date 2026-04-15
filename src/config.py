@@ -36,73 +36,73 @@ MFCC_N_FFT       = 2048
 MFCC_HOP_LENGTH  = 512
 
 # Features — Fingerprinting
-FP_N_FFT              = 2048  # Taille de la fenêtre STFT
-FP_HOP_LENGTH         = 512   # Pas entre les fenêtres STFT
-FP_NEIGHBORHOOD       = (20, 15)  # Taille du voisinage pour la détection des pics (fréq, temps)
-FP_THRESHOLD_PERCENTILE = 80  # Seuil minimum pour ne garder que les pics significatifs
-FP_FAN_OUT            = 5     # Nombre max de paires par pic
-FP_MIN_DELTA_T        = 3     # Distance temporelle minimale entre deux pics (en frames)
-FP_MAX_DELTA_T        = 50    # Distance temporelle maximale entre deux pics (en frames)
+FP_N_FFT              = 2048  # STFT window size
+FP_HOP_LENGTH         = 512   # Step between STFT windows
+FP_NEIGHBORHOOD       = (20, 15)  # Neighborhood size for peak detection (freq, time)
+FP_THRESHOLD_PERCENTILE = 80  # Minimum threshold to keep only significant peaks
+FP_FAN_OUT            = 5     # Max number of pairs per peak
+FP_MIN_DELTA_T        = 3     # Minimum temporal distance between two peaks (in frames)
+FP_MAX_DELTA_T        = 50    # Maximum temporal distance between two peaks (in frames)
 
 # Vector search
-VECTOR_TOP_K_SEGMENTS = 200   # Nb de segments candidats récupérés depuis FAISS par segment requête
-VECTOR_TOP_N_TRACKS   = 50    # Nb de tracks uniques qui passent en Stage 2 (fingerprinting)
-VECTOR_TOP_N_RESULTS  = 10    # Nb de résultats finaux retournés à l'interface
+VECTOR_TOP_K_SEGMENTS = 200   # Number of candidate segments retrieved from FAISS per query segment
+VECTOR_TOP_N_TRACKS   = 50    # Number of unique tracks that pass to Stage 2 (fingerprinting)
+VECTOR_TOP_N_RESULTS  = 10    # Number of final results returned to the interface
 
-INDEX_TYPE = "flat" # Options are : "flat", "hnsw", "ivf"
+INDEX_TYPE = "flat" # Options are: "flat", "hnsw", "ivf"
 
 # Embedding
-EMBEDDING_METHOD = "clap"                           # "mfcc" ou "clap" ou "muq" ou "mert"
-CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"        # "laion/clap-htsat-unfused" ou "laion/larger_clap_music"
+EMBEDDING_METHOD = "clap"                                   # "mfcc" or "clap" or "muq" or "mert"
+CLAP_MODEL_NAME  = "laion/clap-htsat-unfused"        # "laion/clap-htsat-unfused" or "laion/larger_clap_music"
 CLAP_SAMPLE_RATE = 48000
 
 MUQ_SAMPLE_RATE  = 24000
 MUQ_MODEL_NAME   = "OpenMuQ/MuQ-large-msd-iter"
 MUQ_BATCH_SIZE   = 8
 
-CLAP_BATCH_SIZE  = 32   # À ajuster selon le GPU : trop grand = contre-productif sur MPS
+CLAP_BATCH_SIZE  = 32   # Adjust according to GPU: too large = counterproductive on MPS
 
 # Features — MERT
-MERT_MODEL_NAME  = "m-a-p/MERT-v1-95M"   # Ou "m-a-p/MERT-v1-330M" (plus grand, plus lent)
+MERT_MODEL_NAME  = "m-a-p/MERT-v1-95M"   # Or "m-a-p/MERT-v1-330M" (larger, slower)
 MERT_SAMPLE_RATE = 24000
 MERT_BATCH_SIZE  = 8
 
-# Téléchargements parallèles (python manage.py ingest)
-# Augmenter si connexion rapide, réduire si bans YouTube fréquents
+# Parallel downloads (python manage.py ingest)
+# Increase if fast connection, decrease if frequent YouTube bans
 DOWNLOAD_WORKERS = 5
 
-# Augmentation RIR
-# RIR_SOURCE : "synthetic" → RIRs mathématiques générées à la volée
-#              "mit"       → vraies RIRs WAV dans RIR_MIT_DIR, sélection par diversité RT60
+# RIR Augmentation
+# RIR_SOURCE: "synthetic" → mathematical RIRs generated on the fly
+#             "mit"       → real WAV RIRs in RIR_MIT_DIR, selected by RT60 diversity
 RIR_SOURCE  = "synthetic"   # "synthetic" | "mit"
-RIR_N       = 5             # nombre de RIRs par track
-RIR_MIT_DIR = "data/rir"    # dossier contenant les fichiers WAV du MIT (si RIR_SOURCE = "mit")
+RIR_N       = 5             # number of RIRs per track
+RIR_MIT_DIR = "data/rir"    # folder containing MIT WAV files (if RIR_SOURCE = "mit")
 
-# Optimisations
-# Mettre à False pour revenir au comportement de base sans optimisations
-OPT_FLOAT16              = True   # Charger CLAP/MuQ en demi-précision (float16) → moins de RAM, plus rapide
-OPT_BATCH_EMBED          = True   # Embedder tous les segments en un seul batch dans identify_track
-OPT_FINGERPRINT_PARALLEL = True   # Charger et fingerprinter les candidats en parallèle (Stage 2)
-OPT_QUERY_DENOISE        = False  # Débruitage spectral noisereduce (non-stationnaire) sur la requête audio
-FINGERPRINT_CACHE_MAX    = 256    # Taille max du cache LRU fingerprints en RAM
+# Optimizations
+# Set to False to revert to default behavior without optimizations
+OPT_FLOAT16              = True   # Load CLAP/MuQ in half-precision (float16) → less RAM, faster
+OPT_BATCH_EMBED          = True   # Embed all segments in a single batch in identify_track
+OPT_FINGERPRINT_PARALLEL = True   # Load and fingerprint candidates in parallel (Stage 2)
+OPT_QUERY_DENOISE        = False  # Spectral denoise noisereduce (non-stationary) on the audio query
+FINGERPRINT_CACHE_MAX    = 256    # Max size of LRU fingerprints cache in RAM
 
-# Affichage
-PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks
-PROGRESS_TRACK    = True   # Barre de progression par morceau (segments)
+# Display
+PROGRESS_DATASET  = True   # Global progress bar across all tracks
+PROGRESS_TRACK    = True   # Progress bar per track (segments)
 
-# Interface web (webapp/backend/server.py)
-UI_LISTEN_DURATION  = 15          # Durée d'enregistrement micro en secondes
-UI_CONFIDENCE_RATIO = 2.5         # Ratio score[0]/score[1] pour un résultat certain
+# Web interface (webapp/backend/server.py)
+UI_LISTEN_DURATION  = 15          # Microphone recording duration in seconds
+UI_CONFIDENCE_RATIO = 2.5         # score[0]/score[1] ratio for a certain result
 
 
 def get_collection_key(method: str = None) -> str:
     """
-    Retourne la clé unique méthode+modèle utilisée pour nommer :
-      - la collection ChromaDB  (ex. "clap_larger_clap_music")
-      - l'index FAISS           (ex. "index_clap_larger_clap_music_flat.faiss")
-      - le parquet segments     (ex. "segments_clap_larger_clap_music.parquet")
+    Returns the unique method+model key used to name:
+      - the ChromaDB collection  (e.g., "clap_larger_clap_music")
+      - the FAISS index          (e.g., "index_clap_larger_clap_music_flat.faiss")
+      - the segments parquet     (e.g., "segments_clap_larger_clap_music.parquet")
 
-    La clé est filesystem-safe (pas de '/', ':', '-' → remplacés par '_').
+    The key is filesystem-safe (no '/', ':', '-' → replaced by '_').
     """
     if method is None:
         method = EMBEDDING_METHOD
@@ -115,4 +115,4 @@ def get_collection_key(method: str = None) -> str:
     if method == "mert":
         model_slug = MERT_MODEL_NAME.split("/")[-1].replace("-", "_")
         return f"mert_{model_slug}"
-    return method  # mfcc : pas de modèle externe
+    return method  # mfcc: no external model

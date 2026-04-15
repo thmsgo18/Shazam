@@ -1,8 +1,8 @@
 """
 src/retrieval/searcher.py
 
-Chargement de l'index FAISS et fonctions de recherche.
-Responsable : Personne C
+Loading the FAISS index and search functions.
+Owner: Person C
 """
 
 from __future__ import annotations
@@ -21,17 +21,17 @@ _SEARCHER_CACHE: dict[str, tuple[faiss.Index, pd.DataFrame]] = {}
 
 def load_searcher(method: str, force_reload: bool = False) -> tuple[faiss.Index, pd.DataFrame]:
     """
-    Charge l'index FAISS et le parquet de segments pour une méthode donnée.
+    Loads the FAISS index and the segments parquet for a given method.
 
     Args:
-        method: méthode d'embedding — "mfcc", "clap" ou "muq".
-                La clé collection (méthode + modèle) est résolue via config.get_collection_key().
+        method: embedding method — "mfcc", "clap", or "muq".
+                The collection key (method + model) is resolved via config.get_collection_key().
 
     Returns:
-        Tuple (index FAISS, DataFrame segments).
+        Tuple (FAISS index, segments DataFrame).
 
     Raises:
-        FileNotFoundError: si l'index n'existe pas ou n'a pas été reconstruit.
+        FileNotFoundError: if the index does not exist or has not been rebuilt.
     """
     key        = config.get_collection_key(method)
 
@@ -43,29 +43,29 @@ def load_searcher(method: str, force_reload: bool = False) -> tuple[faiss.Index,
     index_path = index_dir / f"index_{key}_{index_type}.faiss"
 
     if not index_path.exists():
-        # Cherche quelles clés sont disponibles pour aider l'utilisateur
+        # Look for available keys to help the user
         available = [p.stem for p in index_dir.glob(f"index_*_{index_type}.faiss")]
         if available:
             raise FileNotFoundError(
-                f"Pas d'index pour '{method}' (clé='{key}', type={index_type}) dans {index_dir}/.\n"
-                f"Index disponibles : {', '.join(sorted(available))}.\n"
-                f"Change EMBEDDING_METHOD / CLAP_MODEL_NAME dans config.py ou relance "
+                f"No index for '{method}' (key='{key}', type={index_type}) in {index_dir}/.\n"
+                f"Available indexes: {', '.join(sorted(available))}.\n"
+                f"Change EMBEDDING_METHOD / CLAP_MODEL_NAME in config.py or run "
                 f"`python manage.py rebuild --what index`."
             )
         raise FileNotFoundError(
-            f"Aucun index trouvé dans {index_dir}/.\n"
-            f"Lance d'abord : python manage.py ingest"
+            f"No index found in {index_dir}/.\n"
+            f"Run first: python manage.py ingest"
         )
 
     index = faiss.read_index(str(index_path))
 
-    # L'ordre des segments est sauvegardé dans INDEX_DIR par build_index.py
-    # (reconstruit depuis ChromaDB à chaque build — toujours synchronisé avec l'index FAISS)
+    # The order of segments is saved in INDEX_DIR by build_index.py
+    # (rebuilt from ChromaDB at each build — always synchronized with the FAISS index)
     seg_path = index_dir / f"segments_{key}.parquet"
     if not seg_path.exists():
         raise FileNotFoundError(
-            f"Fichier d'ordre des segments manquant : {seg_path}\n"
-            f"Lance d'abord : python manage.py rebuild --what index"
+            f"Missing segment order file: {seg_path}\n"
+            f"Run first: python manage.py rebuild --what index"
         )
     segments = pd.read_parquet(str(seg_path))
 
@@ -74,7 +74,7 @@ def load_searcher(method: str, force_reload: bool = False) -> tuple[faiss.Index,
 
 
 def clear_searcher_cache(method: str | None = None) -> None:
-    """Vide le cache mémoire des index/searchers."""
+    """Clears the memory cache of indexes/searchers."""
     if method is None:
         _SEARCHER_CACHE.clear()
         return
@@ -88,21 +88,21 @@ def search_segments(
     k: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Cherche les k segments les plus proches dans l'index FAISS.
+    Searches for the k closest segments in the FAISS index.
 
     Args:
-        index:           index FAISS chargé.
-        query_embedding: vecteur de la requête, shape (D,).
-        k:               nombre de voisins à retourner.
+        index:           loaded FAISS index.
+        query_embedding: query vector, shape (D,).
+        k:               number of neighbors to return.
 
     Returns:
-        Tuple (distances, indices) de shape (k,).
-        Attention : FAISS retourne -1 dans indices si pas assez de voisins.
+        Tuple (distances, indices) of shape (k,).
+        Warning: FAISS returns -1 in indices if there are not enough neighbors.
     """
-    xq = query_embedding.astype("float32").reshape(1,-1)    # FAISS attend un tableau 2D (1, D) en float32
-    faiss.normalize_L2(x= xq)                               # Même normalisation qu'à l'indexation
-    distances, indices = index.search(x= xq, k= k)          # Recherche des k voisins
-    return distances[0], indices[0]                         # [0] pour enlever le coté batch
+    xq = query_embedding.astype("float32").reshape(1,-1)    # FAISS expects a 2D array (1, D) in float32
+    faiss.normalize_L2(x= xq)                               # Same normalization as during indexing
+    distances, indices = index.search(x= xq, k= k)          # Search for the k neighbors
+    return distances[0], indices[0]                         # [0] to remove the batch dimension
 
 
 def aggregate_by_track(
@@ -111,24 +111,24 @@ def aggregate_by_track(
     segments: pd.DataFrame,
 ) -> list[tuple[str, float]]:
     """
-    Agrège les résultats de recherche FAISS par track_id.
+    Aggregates FAISS search results by track_id.
 
-    Pour chaque indice retourné, récupère le track_id correspondant
-    dans le DataFrame et additionne les scores.
+    For each returned index, fetches the corresponding track_id
+    in the DataFrame and sums the scores.
 
     Args:
-        indices:   indices FAISS de shape (k,).
-        distances: distances FAISS de shape (k,) — scores cosine (plus élevé = plus proche).
-        segments:  DataFrame segments avec colonne "track_id".
+        indices:   FAISS indices of shape (k,).
+        distances: FAISS distances of shape (k,) — cosine scores (higher = closer).
+        segments:  segments DataFrame with a "track_id" column.
 
     Returns:
-        Liste triée [(track_id, score_total), ...] du meilleur au moins bon.
+        Sorted list [(track_id, total_score), ...] from best to worst.
     """
     scores = {}
-    for idx, dist in zip(indices, distances):                       # zip permet d'assembler par paire
+    for idx, dist in zip(indices, distances):                       # zip pairs the items together
         if idx == -1 :
             continue
-        track_id = segments.iloc[idx]["track_id"]                   # Permet d'acceder à une ligne de dataframe donné par idx
-        scores[track_id]= scores.get(track_id, 0.0) + float(dist)   # Calcule de l'accumulation du score. score élévé chanson très proche.
+        track_id = segments.iloc[idx]["track_id"]                   # Accesses a dataframe row given by idx
+        scores[track_id]= scores.get(track_id, 0.0) + float(dist)   # Accumulates the score. High score = very close song.
 
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True) # Retourne une liste de tuple trié par ordre décroissant.
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True) # Returns a list of tuples sorted in descending order.

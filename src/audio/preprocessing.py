@@ -1,12 +1,14 @@
 """
 src/audio/preprocessing.py
 
-Ce module fournit :
-  - iter_segments() : découpage d'un waveform en fenêtres chevauchantes
-  - preprocess_query() : pipeline de prétraitement de la requête audio
-      1. Filtre passe-haut 80 Hz  → coupe grondements micro / HVAC / vent
-      2. Normalisation LUFS -14   → aligne le niveau sur la base de données
-      3. Peak normalization        → sécurité anti-saturation
+This module provides:
+
+    - iter_segments(): slices a waveform into overlapping windows
+    - preprocess_query(): preprocesses the audio query
+
+    1. 80 Hz high-pass filter → cuts mic/HVAC/wind noise
+    2. LUFS -14 normalization → aligns the level with the database
+    3. Peak normalization → prevents clipping
 """
 from src.config import (
     SEGMENT_WIN_S,
@@ -19,23 +21,23 @@ from typing import Iterator, Tuple
 
 def iter_segments(waveform: np.ndarray, sr: int, win_s: float = SEGMENT_WIN_S, hop_s: float = SEGMENT_HOP_S, min_win: float = SEGMENT_MIN_WIN)-> Iterator[Tuple[float, np.ndarray]]:
     """
-    Iterate over fixed-size audio segments with optional overlap.
-    This function splits an audio waveform into segments of a given window size, moving forward using a hop size. If the final remaining audio is long enough.
+    Iterate over fixed-size audio segments with optional overlap. 
+    This function splits an audio waveform into segments of a given window size, moving forward using a hop size. If the final remaining audio is long enough. 
 
-    Args:
-        waveform (np.ndarray): Input audio waveform.
-        sr (int): Sampling rate of the waveform.
-        win_s (float, optional): Segment window size in seconds.
-        hop_s (float, optional): Step size between consecutive segments in seconds.
-        min_win (float, optional): Minimum fraction of window size required to keep the last segment.
+    Args: 
+    waveform (np.ndarray): Input audio waveform. 
+    sr (int): Sampling rate of the waveform. 
+    win_s (float, optional): Segment window size in seconds. 
+    hop_s (float, optional): Step size between consecutive segments in seconds. 
+    min_win (float, optional): Minimum fraction of window size required to keep the last segment. 
 
-    Yields:
-            - Segment start time in seconds.
-            - Audio segment waveform.
+    Yields: 
+    - Segment start time in seconds. 
+    - Segment waveform audio. 
 
-    Raises:
-        ValueError:
-            If window size, hop size, or sampling rate are invalid.
+    Reasons: 
+    ValueError: 
+    If window size, hop size, or sampling rate are invalid.
     """
     if win_s <= 0:
         raise ValueError("win_s <= 0")
@@ -63,25 +65,27 @@ def iter_segments(waveform: np.ndarray, sr: int, win_s: float = SEGMENT_WIN_S, h
 
 def preprocess_query(waveform: np.ndarray, sr: int) -> np.ndarray:
     """
-    Prétraitement de la requête audio avant embedding + fingerprinting.
+    Audio request preprocessing before embedding and fingerprinting.
 
-    Étapes (dans l'ordre) :
-      1. Filtre passe-haut Butterworth ordre 4 à 80 Hz
-         → supprime grondements micro, HVAC, vent
-         → la littérature (ISMIR 2025) montre que descendre à 80 Hz
-           améliore la robustesse en environnement réverbérant
-      2. Normalisation LUFS à -14 LUFS (standard streaming)
-         → CLAP est entraîné sur des audios normalisés ; les écarts de
-           volume dégradent directement la qualité des embeddings
-      3. Peak normalization à 0.95
-         → sécurité anti-saturation numérique
+    Steps (in order):
+
+    1. Butterworth high-pass filter, order 4, at 80 Hz
+        → removes mic rumble, HVAC noise, wind noise
+        → literature (ISMIR 2025) shows that going down to 80 Hz
+        improves robustness in reverberant environments
+
+    2. LUFS normalization to -14 LUFS (standard streaming)
+        → CLAP is trained on normalized audio; volume deviations directly degrade embedding quality
+
+    3. Peak normalization to 0.95
+        → digital clipping protection
 
     Args:
-        waveform: signal audio mono, float32, valeurs dans [-1, 1]
-        sr:       fréquence d'échantillonnage en Hz
+    waveform: mono audio signal, float32, values ​​in [-1, 1]
+    sr: sampling frequency in Hz
 
     Returns:
-        waveform prétraité, même shape et dtype que l'entrée
+    preprocessed waveform, same shape and dtype as the input
     """
     from scipy import signal as scipy_signal
     import pyloudnorm as pyln
@@ -89,14 +93,14 @@ def preprocess_query(waveform: np.ndarray, sr: int) -> np.ndarray:
 
     audio = waveform.astype(np.float32)
 
-    # 1. Filtre passe-haut 80 Hz
+    # 1. 80 Hz High-Pass Filter
     sos = scipy_signal.butter(4, 80.0, btype="highpass", fs=sr, output="sos")
     audio = scipy_signal.sosfilt(sos, audio).astype(np.float32)
 
-    # 2. Débruitage spectral (optionnel, contrôlé par OPT_QUERY_DENOISE)
-    #    Mode non-stationnaire : adapté aux bruits variables (café, rue)
-    #    n_fft=2048  : résolution temps-fréquence adaptée à la musique (vs 512 pour la voix)
-    #    prop_decrease=0.75 : débruitage partiel → moins d'artefacts musicaux
+    # 2. Spectral noise reduction (optional, controlled by OPT_QUERY_DENOISE)
+    #    Non-stationary mode: suitable for varying noise levels (cafe, street)
+    #    n_fft=2048: time-frequency resolution suitable for music (vs. 512 for voice)
+    #    prop_decrease=0.75: partial noise reduction → fewer musical artifacts
     if config.OPT_QUERY_DENOISE:
         import noisereduce as nr
         audio = nr.reduce_noise(
@@ -108,9 +112,9 @@ def preprocess_query(waveform: np.ndarray, sr: int) -> np.ndarray:
             n_jobs=-1,
         ).astype(np.float32)
 
-    # 3. Normalisation LUFS (-14 LUFS)
-    #    Le warning "clipped samples" de pyloudnorm est inoffensif : la peak norm
-    #    (étape 4) rattrape toute saturation introduite ici.
+    # 3. LUFS normalization (-14 LUFS)
+    #   The "clipped samples" warning from pyloudnorm is harmless: the peak norm
+    #   (step 4) compensates for any saturation introduced here.
     import warnings as _warnings
     meter = pyln.Meter(sr)
     loudness = meter.integrated_loudness(audio.astype(np.float64))
@@ -121,7 +125,7 @@ def preprocess_query(waveform: np.ndarray, sr: int) -> np.ndarray:
                 audio.astype(np.float64), loudness, -14.0
             ).astype(np.float32)
 
-    # 4. Peak normalization (sécurité anti-saturation)
+    # 4. Peak normalization (anti-saturation safety)
     peak = np.abs(audio).max()
     if peak > 0:
         audio = audio / peak * 0.95

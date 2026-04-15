@@ -1,12 +1,12 @@
 """
 src/maintenance/clean.py
 
-Suppression complète ou partielle de la base de données :
-embeddings ChromaDB, index FAISS, fingerprints SQLite et metadata.parquet.
+Complete or partial deletion of the database:
+ChromaDB embeddings, FAISS index, SQLite fingerprints, and metadata.parquet.
 
-Points d'entrée publics :
-  run_clean(yes)              — supprime tout
-  run_clean_track(track_id)   — supprime un seul track
+Public entry points:
+  run_clean(yes)              — deletes everything
+  run_clean_track(track_id)   — deletes a single track
 """
 
 from __future__ import annotations
@@ -26,15 +26,15 @@ ROOT    = Path(__file__).resolve().parents[2]
 console = Console()
 
 TARGETS = [
-    (ROOT / config.CHROMA_DIR,      "Embeddings ChromaDB", "dossier"),
-    (ROOT / config.INDEX_DIR,       "Index FAISS",         "dossier"),
-    (ROOT / config.FINGERPRINTS_DB, "Fingerprints SQLite", "fichier"),
-    (ROOT / config.METADATA_PATH,   "Metadata parquet",    "fichier"),
+    (ROOT / config.CHROMA_DIR,      "ChromaDB Embeddings", "folder"),
+    (ROOT / config.INDEX_DIR,       "FAISS Index",         "folder"),
+    (ROOT / config.FINGERPRINTS_DB, "SQLite Fingerprints", "file"),
+    (ROOT / config.METADATA_PATH,   "Parquet Metadata",    "file"),
 ]
 
 
 def _get_size(path: Path) -> str:
-    """Retourne la taille lisible d'un fichier ou dossier."""
+    """Returns the human-readable size of a file or folder."""
     if not path.exists():
         return "—"
     if path.is_file():
@@ -50,19 +50,19 @@ def _get_size(path: Path) -> str:
 
 def run_clean(yes: bool = False) -> None:
     """
-    Supprime tous les embeddings, fingerprints et métadonnées.
+    Deletes all embeddings, fingerprints, and metadata.
 
     Args:
-        yes: si True, supprime sans demander de confirmation.
+        yes: if True, deletes without asking for confirmation.
     """
-    console.print("\n[bold red]Nettoyage de la base de données[/bold red]\n")
+    console.print("\n[bold red]Database cleanup[/bold red]\n")
 
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Contenu",  width=25)
-    table.add_column("Chemin",   width=40)
+    table.add_column("Content",  width=25)
+    table.add_column("Path",     width=40)
     table.add_column("Type",     width=8)
-    table.add_column("Taille",   justify="right", width=10)
-    table.add_column("Statut",   width=12)
+    table.add_column("Size",     justify="right", width=10)
+    table.add_column("Status",   width=12)
 
     any_exists = False
     for path, label, kind in TARGETS:
@@ -74,84 +74,85 @@ def run_clean(yes: bool = False) -> None:
             str(path.relative_to(ROOT)),
             kind,
             _get_size(path),
-            "[green]présent[/green]" if exists else "[dim]absent[/dim]",
+            "[green]present[/green]" if exists else "[dim]absent[/dim]",
         )
 
     console.print(table)
 
     if not any_exists:
-        console.print("\n[green]Base déjà vide. Rien à supprimer.[/green]\n")
+        console.print("\n[green]Database is already empty. Nothing to delete.[/green]\n")
         return
 
     if not yes:
-        console.print("\n[bold yellow]Cette action est irréversible.[/bold yellow]")
-        confirm = input("Confirmer la suppression ? [o/N] : ").strip().lower()
-        if confirm not in ("o", "oui", "y", "yes"):
-            console.print("[dim]Annulé.[/dim]\n")
+        console.print("\n[bold yellow]This action is irreversible.[/bold yellow]")
+        confirm = input("Confirm deletion? [y/N]: ").strip().lower()
+        if confirm not in ("y", "yes"):
+            console.print("[dim]Cancelled.[/dim]\n")
             return
 
     console.print()
     for path, label, kind in TARGETS:
         if not path.exists():
-            console.print(f"  [dim]— {label} déjà absent[/dim]")
+            console.print(f"  [dim]— {label} already absent[/dim]")
             continue
         try:
             if path.is_dir():
                 shutil.rmtree(path)
             else:
                 path.unlink()
-            console.print(f"  [green]✓ {label} supprimé[/green]")
+            console.print(f"  [green]✓ {label} deleted[/green]")
         except Exception as exc:
-            console.print(f"  [red]✗ {label} — erreur : {exc}[/red]")
+            console.print(f"  [red]✗ {label} — error : {exc}[/red]")
 
-    console.print("\n[bold green]Base de données nettoyée.[/bold green]\n")
+    console.print("\n[bold green]Database cleaned.[/bold green]\n")
 
 
 # ---------------------------------------------------------------------------
-# Suppression d'un seul track
+# Deletion of a single track
 # ---------------------------------------------------------------------------
 
 def run_clean_track(track_id: str, yes: bool = False) -> None:
     """
-    Supprime un track de tous les stockages :
-      - Segments dans toutes les collections ChromaDB
-      - Fingerprint dans SQLite
-      - Ligne dans metadata.parquet
+    Deletes a track from all storage locations:
+      - Segments in all ChromaDB collections
+      - Fingerprint in SQLite
+      - Row in metadata.parquet
 
-    Imprime un rappel de reconstruire l'index FAISS après la suppression.
-
+    Prints a reminder to rebuild the FAISS index after deletion.
+    
     Args:
-        track_id: identifiant du track à supprimer.
-        yes:      si True, supprime sans demander de confirmation.
+        track_id: identifier of the track to delete.
+        yes:      if True, deletes without asking for confirmation.
     """
     metadata_path = ROOT / config.METADATA_PATH
     fp_db_path    = ROOT / config.FINGERPRINTS_DB
 
-    # --- Vérifier que le track existe ---
+    # --- Check that the track exists ---
     title = track_id
     if metadata_path.exists():
         df = pd.read_parquet(metadata_path)
         row = df[df["track_id"] == track_id]
         if row.empty:
-            console.print(f"\n[yellow]Track introuvable dans metadata : {track_id}[/yellow]")
-            console.print("[dim]Le nettoyage dans ChromaDB et SQLite sera quand même tenté.[/dim]\n")
+            console.print(f"\n[yellow]Track not found in metadata: {track_id}[/yellow]")
+            console.print("[dim]Cleanup in ChromaDB and SQLite will still be attempted.[/dim]\n")
         else:
             t = row.iloc[0]
             title = f"{t.get('title', '?')} — {t.get('artist', '?')}"
     else:
         df = None
 
-    console.print(f"\n[bold red]Suppression du track :[/bold red] {title}")
-    console.print(f"[dim]track_id : {track_id}[/dim]\n")
+    console.print(f"\n[bold red]Deleting track:[/bold red] {title}")
+    console.print(f"[dim]track_id: {track_id}[/dim]\n")
+
 
     if not yes:
-        console.print("[bold yellow]Cette action est irréversible.[/bold yellow]")
-        confirm = input("Confirmer la suppression ? [o/N] : ").strip().lower()
-        if confirm not in ("o", "oui", "y", "yes"):
-            console.print("[dim]Annulé.[/dim]\n")
+        console.print("[bold yellow]This action is irreversible.[/bold yellow]")
+        confirm = input("Confirm deletion? [y/N]: ").strip().lower()
+        if confirm not in ("y", "yes"):
+            console.print("[dim]Cancelled.[/dim]\n")
             return
 
-    # --- ChromaDB : toutes les collections ---
+    # --- ChromaDB: all collections ---
     chroma_dir = ROOT / config.CHROMA_DIR
     if chroma_dir.exists():
         try:
@@ -165,14 +166,14 @@ def run_clean_track(track_id: str, yes: bool = False) -> None:
                     col.delete(ids=ids_to_delete)
                     console.print(
                         f"  [green]✓ ChromaDB [{col.name}][/green] "
-                        f"— {len(ids_to_delete)} segment(s) supprimé(s)"
+                        f"— {len(ids_to_delete)} segment(s) deleted"
                     )
                 else:
-                    console.print(f"  [dim]— ChromaDB [{col.name}] : aucun segment trouvé[/dim]")
+                    console.print(f"  [dim]— ChromaDB [{col.name}]: no segment found[/dim]")
         except Exception as exc:
-            console.print(f"  [red]✗ ChromaDB — erreur : {exc}[/red]")
+            console.print(f"  [red]✗ ChromaDB — error: {exc}[/red]")
     else:
-        console.print("  [dim]— ChromaDB : dossier absent[/dim]")
+        console.print("  [dim]— ChromaDB: folder missing[/dim]")
 
     # --- SQLite fingerprints ---
     if fp_db_path.exists():
@@ -184,13 +185,13 @@ def run_clean_track(track_id: str, yes: bool = False) -> None:
             conn.commit()
             conn.close()
             if cur.rowcount:
-                console.print(f"  [green]✓ Fingerprint SQLite[/green] — supprimé")
+                console.print(f"  [green]✓ SQLite Fingerprint[/green] — deleted")
             else:
-                console.print("  [dim]— Fingerprint SQLite : aucune entrée trouvée[/dim]")
+                console.print("  [dim]— SQLite Fingerprint: no entry found[/dim]")
         except Exception as exc:
-            console.print(f"  [red]✗ Fingerprint SQLite — erreur : {exc}[/red]")
+            console.print(f"  [red]✗ SQLite Fingerprint — error: {exc}[/red]")
     else:
-        console.print("  [dim]— Fingerprint SQLite : base absente[/dim]")
+        console.print("  [dim]— SQLite Fingerprint: database missing[/dim]")
 
     # --- metadata.parquet ---
     if df is not None and not df[df["track_id"] == track_id].empty:
@@ -199,14 +200,15 @@ def run_clean_track(track_id: str, yes: bool = False) -> None:
             tmp = metadata_path.with_suffix(".tmp.parquet")
             df_new.to_parquet(tmp, index=False)
             tmp.replace(metadata_path)
-            console.print(f"  [green]✓ Metadata[/green] — ligne supprimée")
+            console.print(f"  [green]✓ Metadata[/green] — row deleted")
         except Exception as exc:
-            console.print(f"  [red]✗ Metadata — erreur : {exc}[/red]")
+            console.print(f"  [red]✗ Metadata — error: {exc}[/red]")
     else:
-        console.print("  [dim]— Metadata : track absent ou déjà supprimé[/dim]")
+        console.print("  [dim]— Metadata: track missing or already deleted[/dim]")
+
 
     console.print(
-        "\n[bold yellow]Index FAISS non mis à jour.[/bold yellow]\n"
-        "Lancez [cyan]python manage.py rebuild --what index[/cyan] "
-        "pour reconstruire l'index.\n"
+        "\n[bold yellow]FAISS index not updated.[/bold yellow]\n"
+        "Run [cyan]python manage.py rebuild --what index[/cyan] "
+        "to rebuild the index.\n"
     )

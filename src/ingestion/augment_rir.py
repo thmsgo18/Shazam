@@ -1,18 +1,18 @@
 """
 src/ingestion/augment_rir.py
 
-Augmentation des embeddings par convolution de Room Impulse Responses (RIR).
+Augmentation of embeddings by convolution with Room Impulse Responses (RIR).
 
-Pour chaque track, N versions dégradées sont ajoutées dans ChromaDB sous le même
-track_id. L'augmentation améliore la robustesse aux conditions d'enregistrement
-(réverbération, acoustique ambiante).
+For each track, N degraded versions are added to ChromaDB under the same
+track_id. The augmentation improves robustness to recording conditions
+(reverberation, ambient acoustics).
 
-Architecture :
-  Étage 1 — N threads de téléchargement YouTube en parallèle
-  Étage 2 — Convolution RIR en parallèle sur CPU (scipy libère le GIL)
-  Étage 3 — Embedding GPU (séquentiel) + sauvegarde ChromaDB
+Architecture:
+  Stage 1 — N parallel YouTube download threads
+  Stage 2 — Parallel RIR convolution on CPU (scipy releases the GIL)
+  Stage 3 — GPU embedding (sequential) + ChromaDB saving
 
-Point d'entrée public : run_augment(...)
+Public entry point: run_augment(...)
 """
 
 from __future__ import annotations
@@ -60,11 +60,11 @@ FLOWERS_ID = "f01ab00f1fdc5a57fd2676f4d68631a8"
 
 console = Console()
 
-# Arrêt propre sur Ctrl+C — accessible par les threads
+# Clean stop on Ctrl+C — accessible by threads
 _stop_requested = threading.Event()
 
 # ---------------------------------------------------------------------------
-# RIR — génération synthétique
+# RIR — synthetic generation
 # ---------------------------------------------------------------------------
 
 SYNTHETIC_RIR_PARAMS = [
@@ -82,7 +82,7 @@ SYNTHETIC_RIR_PARAMS = [
 
 
 def _make_rir(rt60: float, sr: int, seed: int) -> np.ndarray:
-    """Génère une RIR synthétique (son direct + réflexions + queue diffuse)."""
+    """Generates a synthetic RIR (direct sound + reflections + diffuse tail)."""
     rng      = np.random.RandomState(seed)
     n_samples = int(rt60 * sr * 1.5)
     rir       = np.zeros(n_samples, dtype=np.float32)
@@ -106,20 +106,20 @@ def _make_rir(rt60: float, sr: int, seed: int) -> np.ndarray:
 
 def _estimate_rt60(rir: np.ndarray, sr: int) -> float:
     """
-    Estime le RT60 d'une RIR par décroissance d'énergie (méthode Schroeder).
-    Retourne le temps (en secondes) pour une chute de 60 dB depuis le pic.
+    Estimates the RT60 of a RIR by energy decay (Schroeder method).
+    Returns the time (in seconds) for a 60 dB drop from the peak.
     """
     energy = rir ** 2
     peak_idx = int(np.argmax(energy))
     tail = energy[peak_idx:]
-    # Intégrale inverse de Schroeder
+    # Schroeder backward integral
     schroeder = np.cumsum(tail[::-1])[::-1]
     schroeder = np.maximum(schroeder, 1e-12)
     db = 10.0 * np.log10(schroeder / schroeder[0])
-    # Premier indice où ça passe sous -60 dB
+    # First index where it goes below -60 dB
     indices = np.where(db <= -60.0)[0]
     if len(indices) == 0:
-        # La RIR est trop courte pour mesurer -60 dB → extrapoler
+        # The RIR is too short to measure -60 dB → extrapolate
         indices_20 = np.where(db <= -20.0)[0]
         if len(indices_20) == 0:
             return len(tail) / sr
@@ -132,28 +132,28 @@ def _select_diverse_mit_rirs(
     n: int,
 ) -> list[tuple[str, np.ndarray]]:
     """
-    Sélectionne N RIRs parmi les candidats pour maximiser la diversité acoustique.
+    Selects N RIRs from candidates to maximize acoustic diversity.
 
-    Stratégie : trier par RT60 puis échantillonner uniformément — on couvre
-    ainsi toute la plage allant des espaces secs (RT60 court) aux grandes salles
-    (RT60 long), avec le maximum de diversité possible pour N échantillons.
+    Strategy: sort by RT60 then sample uniformly — this covers
+    the entire range from dry spaces (short RT60) to large halls
+    (long RT60), with maximum diversity possible for N samples.
 
     Args:
-        candidates: liste de (nom, waveform, rt60) déjà chargés.
-        n:          nombre de RIRs à retourner.
+        candidates: list of (name, waveform, rt60) already loaded.
+        n:          number of RIRs to return.
 
     Returns:
-        Liste de (nom, waveform) triés du plus sec au plus réverbérant.
+        List of (name, waveform) sorted from driest to most reverberant.
     """
-    sorted_c = sorted(candidates, key=lambda x: x[2])  # tri par RT60 croissant
+    sorted_c = sorted(candidates, key=lambda x: x[2])  # sort by RT60 ascending
     if n >= len(sorted_c):
         return [(name, rir) for name, rir, _ in sorted_c]
-    # Échantillonnage uniforme sur la liste triée
+    # Uniform sampling on the sorted list
     indices = np.linspace(0, len(sorted_c) - 1, n, dtype=int)
     selected = [sorted_c[i] for i in indices]
     console.print(
-        f"[green]{len(candidates)} RIRs MIT disponibles → "
-        f"{n} sélectionnées par diversité RT60 "
+        f"[green]{len(candidates)} MIT RIRs available → "
+        f"{n} selected by RT60 diversity "
         f"({selected[0][2]:.2f}s … {selected[-1][2]:.2f}s)[/green]"
     )
     return [(name, rir) for name, rir, _ in selected]
@@ -161,23 +161,23 @@ def _select_diverse_mit_rirs(
 
 def _load_rirs(rir_dir: Path, n: int, sr: int, source: str = "synthetic") -> list[tuple[str, np.ndarray]]:
     """
-    Charge N RIRs selon la source configurée.
+    Loads N RIRs according to the configured source.
 
     Args:
-        rir_dir: dossier contenant les WAV MIT (ignoré si source="synthetic").
-        n:       nombre de RIRs à retourner.
-        sr:      sample rate cible.
-        source:  "synthetic" → RIRs mathématiques | "mit" → WAV du dossier rir_dir.
+        rir_dir: folder containing MIT WAVs (ignored if source="synthetic").
+        n:       number of RIRs to return.
+        sr:      target sample rate.
+        source:  "synthetic" → mathematical RIRs | "mit" → WAVs from rir_dir folder.
     """
     if source == "mit":
         wavs = sorted(rir_dir.glob("*.wav")) + sorted(rir_dir.glob("*.WAV"))
         if not wavs:
             console.print(
-                f"[yellow]⚠ Aucun WAV dans {rir_dir} (source='mit') "
-                f"— bascule sur RIRs synthétiques.[/yellow]"
+                f"[yellow]⚠ No WAV in {rir_dir} (source='mit') "
+                f"— switching to synthetic RIRs.[/yellow]"
             )
         else:
-            console.print(f"[cyan]{len(wavs)} fichier(s) WAV MIT trouvé(s) dans {rir_dir}[/cyan]")
+            console.print(f"[cyan]{len(wavs)} MIT WAV file(s) found in {rir_dir}[/cyan]")
             candidates: list[tuple[str, np.ndarray, float]] = []
             for wav in wavs:
                 try:
@@ -185,13 +185,13 @@ def _load_rirs(rir_dir: Path, n: int, sr: int, source: str = "synthetic") -> lis
                     rt60  = _estimate_rt60(y, sr)
                     candidates.append((wav.stem, y, rt60))
                 except Exception as exc:
-                    console.print(f"[yellow]⚠ Impossible de charger {wav.name} : {exc}[/yellow]")
+                    console.print(f"[yellow]⚠ Unable to load {wav.name}: {exc}[/yellow]")
             if candidates:
                 return _select_diverse_mit_rirs(candidates, n)
-            console.print("[yellow]⚠ Aucune RIR MIT valide — bascule sur synthétiques.[/yellow]")
+            console.print("[yellow]⚠ No valid MIT RIR — switching to synthetics.[/yellow]")
 
-    # source="synthetic" ou fallback
-    console.print(f"[cyan]RIRs synthétiques générées ({n} environnements)[/cyan]")
+    # source="synthetic" or fallback
+    console.print(f"[cyan]Synthetic RIRs generated ({n} environments)[/cyan]")
     return [
         (f"synth_{name}_rt{int(rt60 * 100)}ms", _make_rir(rt60, sr, seed))
         for name, rt60, seed in SYNTHETIC_RIR_PARAMS[:n]
@@ -199,7 +199,7 @@ def _load_rirs(rir_dir: Path, n: int, sr: int, source: str = "synthetic") -> lis
 
 
 def _apply_rir(waveform: np.ndarray, rir: np.ndarray) -> np.ndarray:
-    """Convolve le waveform avec la RIR, normalise le niveau RMS, tronque."""
+    """Convolve the waveform with the RIR, normalize RMS level, truncate."""
     deg     = fftconvolve(waveform.astype(np.float32), rir.astype(np.float32))[:len(waveform)]
     rms_orig = np.sqrt(np.mean(waveform ** 2)) + 1e-9
     rms_deg  = np.sqrt(np.mean(deg ** 2)) + 1e-9
@@ -211,7 +211,7 @@ def _apply_rir(waveform: np.ndarray, rir: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Helpers d'embedding
+# Embedding helpers
 # ---------------------------------------------------------------------------
 
 def _get_batch_size(method: str) -> int:
@@ -229,7 +229,7 @@ def _get_load_sr(method: str) -> int:
 
 
 def _batch_embed(segments: list[np.ndarray], sr: int, method: str) -> np.ndarray:
-    """Embedde un batch de segments — agnostique à la méthode."""
+    """Embeds a batch of segments — method-agnostic."""
     if method == "clap":
         from src.features.embeddings_audio import clap_batch_embeddings
         result = clap_batch_embeddings(segments, sr=sr, model_name=config.CLAP_MODEL_NAME)
@@ -250,7 +250,7 @@ def _batch_embed(segments: list[np.ndarray], sr: int, method: str) -> np.ndarray
 
 
 # ---------------------------------------------------------------------------
-# Suivi des RIRs dans metadata.parquet
+# Tracking RIRs in metadata.parquet
 # ---------------------------------------------------------------------------
 
 def _backfill_rir_done(
@@ -259,12 +259,12 @@ def _backfill_rir_done(
     collection_key: str,
 ) -> dict[str, list[str]]:
     """
-    Scanne ChromaDB pour reconstruire l'historique RIR dans metadata.parquet.
-    Utilisé quand le tracking n'existait pas encore lors de l'augmentation.
+    Scans ChromaDB to rebuild RIR history in metadata.parquet.
+    Used when tracking did not exist yet during augmentation.
 
-    Retourne {track_id: [rir_names]}.
+    Returns {track_id: [rir_names]}.
     """
-    console.print("[yellow]Scan ChromaDB pour reconstruire l'historique RIR...[/yellow]")
+    console.print("[yellow]Scanning ChromaDB to rebuild RIR history...[/yellow]")
     PAGE   = 500
     offset = 0
     rir_map: dict[str, set[str]] = {}
@@ -288,10 +288,10 @@ def _backfill_rir_done(
         offset += PAGE
 
     if not rir_map:
-        console.print("[dim]Aucun segment RIR trouvé dans ChromaDB.[/dim]")
+        console.print("[dim]No RIR segment found in ChromaDB.[/dim]")
         return {}
 
-    console.print(f"[green]✓ {len(rir_map)} track(s) avec RIRs trouvés dans ChromaDB[/green]")
+    console.print(f"[green]✓ {len(rir_map)} track(s) with RIRs found in ChromaDB[/green]")
 
     df = pd.read_parquet(meta_path)
     if "rir_augmented" not in df.columns:
@@ -317,13 +317,13 @@ def _backfill_rir_done(
     except Exception as exc:
         console.print(f"[red]Erreur écriture metadata : {exc}[/red]")
 
-    console.print(f"[green]✓ metadata.parquet mis à jour ({updated} tracks)[/green]\n")
+    console.print(f"[green]✓ metadata.parquet updated ({updated} tracks)[/green]\n")
     return {tid: list(rirs) for tid, rirs in rir_map.items()}
 
 
 def _load_rir_done(df_meta: pd.DataFrame, collection_key: str) -> dict[str, list[str]]:
     """
-    Lit la colonne rir_augmented et retourne {track_id: [rir_names déjà faits]}.
+    Reads the rir_augmented column and returns {track_id: [rir_names already done]}.
     """
     if "rir_augmented" not in df_meta.columns:
         return {}
@@ -346,7 +346,7 @@ def _mark_rir_done(
     rir_name: str,
     lock: threading.Lock,
 ) -> None:
-    """Ajoute rir_name dans rir_augmented[collection_key] pour ce track_id (atomique)."""
+    """Adds rir_name to rir_augmented[collection_key] for this track_id (atomic)."""
     with lock:
         df = pd.read_parquet(meta_path)
         if "rir_augmented" not in df.columns:
@@ -370,18 +370,18 @@ def _mark_rir_done(
 
 
 # ---------------------------------------------------------------------------
-# Reconstruction index FAISS
+# FAISS index reconstruction
 # ---------------------------------------------------------------------------
 
 def _rebuild_index(collection_key: str, chroma_client) -> None:
     from src.index.build_index import _build_for_method
-    console.print("\n[yellow]Reconstruction de l'index FAISS...[/yellow]")
+    console.print("\n[yellow]Rebuilding FAISS index...[/yellow]")
     _build_for_method(collection_key, config.INDEX_TYPE, chroma_client)
-    console.print("[green]✓ Index FAISS reconstruit.[/green]")
+    console.print("[green]✓ FAISS index rebuilt.[/green]")
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_augment(
@@ -395,17 +395,17 @@ def run_augment(
     rebuild_index: bool = True,
 ) -> None:
     """
-    Augmente la base ChromaDB avec des versions dégradées par RIR.
+    Augments the ChromaDB database with RIR-degraded versions.
 
     Args:
-        method:        méthode d'embedding (None = config.EMBEDDING_METHOD).
-        tracks:        'flowers', 'all' ou un track_id précis.
-        n_rir:         nombre de RIRs à appliquer par track (None = config.RIR_N).
-        rir_dir:       dossier WAV MIT (None = config.RIR_MIT_DIR).
+        method:        embedding method (None = config.EMBEDDING_METHOD).
+        tracks:        'flowers', 'all' or a specific track_id.
+        n_rir:         number of RIRs to apply per track (None = config.RIR_N).
+        rir_dir:       MIT WAV folder (None = config.RIR_MIT_DIR).
         source:        "synthetic" | "mit" (None = config.RIR_SOURCE).
-        workers:       nombre de threads de téléchargement (None = config.DOWNLOAD_WORKERS).
-        device:        device PyTorch : 'cpu' / 'cuda' / 'mps' (None = auto).
-        rebuild_index: si True, reconstruit l'index FAISS après l'augmentation.
+        workers:       number of download threads (None = config.DOWNLOAD_WORKERS).
+        device:        PyTorch device: 'cpu' / 'cuda' / 'mps' (None = auto).
+        rebuild_index: if True, rebuilds FAISS index after augmentation.
     """
     torch.set_num_threads(4)
     _stop_requested.clear()
@@ -427,39 +427,39 @@ def run_augment(
     rir_path.mkdir(parents=True, exist_ok=True)
 
     console.print(Panel(
-        f"[bold]Méthode     :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Method     :[/bold] [cyan]{method}[/cyan]\n"
         f"[bold]Tracks      :[/bold] [cyan]{tracks}[/cyan]\n"
-        f"[bold]Source RIR  :[/bold] [cyan]{source}[/cyan]\n"
+        f"[bold]RIR Source  :[/bold] [cyan]{source}[/cyan]\n"
         f"[bold]N RIRs      :[/bold] [cyan]{n_rir}[/cyan]\n"
-        f"[bold]Workers DL  :[/bold] [cyan]{workers}[/cyan]\n"
+        f"[bold]DL Workers  :[/bold] [cyan]{workers}[/cyan]\n"
         + (f"[bold]RIR dir     :[/bold] [cyan]{rir_dir}[/cyan]" if source == "mit" else ""),
-        title="[bold cyan]Augmentation RIR[/bold cyan]",
+        title="[bold cyan]RIR Augmentation[/bold cyan]",
         expand=False,
     ))
 
-    # Pré-chargement modèle AVANT tout import faiss
+    # Pre-loading model BEFORE any faiss import
     if method == "clap":
         from src.features.embeddings_audio import _load_clap
-        console.print(f"[cyan]Chargement modèle {config.CLAP_MODEL_NAME} ({device})...[/cyan]")
+        console.print(f"[cyan]Loading model {config.CLAP_MODEL_NAME} ({device})...[/cyan]")
         _load_clap(config.CLAP_MODEL_NAME, device=device)
-        console.print("[green]✓ Modèle CLAP prêt.[/green]\n")
+        console.print("[green]✓ CLAP model ready.[/green]\n")
     elif method == "muq":
         from src.features.embeddings_audio import _load_muq
-        console.print(f"[cyan]Chargement modèle {config.MUQ_MODEL_NAME} ({device})...[/cyan]")
+        console.print(f"[cyan]Loading model {config.MUQ_MODEL_NAME} ({device})...[/cyan]")
         _load_muq(config.MUQ_MODEL_NAME)
-        console.print("[green]✓ Modèle MuQ prêt.[/green]\n")
+        console.print("[green]✓ MuQ model ready.[/green]\n")
     elif method == "mert":
         from src.features.embeddings_audio import _load_mert
-        console.print(f"[cyan]Chargement modèle {config.MERT_MODEL_NAME} ({device})...[/cyan]")
+        console.print(f"[cyan]Loading model {config.MERT_MODEL_NAME} ({device})...[/cyan]")
         _load_mert(config.MERT_MODEL_NAME)
-        console.print("[green]✓ Modèle MERT prêt.[/green]\n")
+        console.print("[green]✓ MERT model ready.[/green]\n")
 
     collection_key = config.get_collection_key(method)
     chroma_client  = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
     try:
         collection = chroma_client.get_collection(name=collection_key)
     except Exception:
-        console.print(f"[red]Collection '{collection_key}' introuvable. Lance d'abord l'ingestion.[/red]")
+        console.print(f"[red]Collection '{collection_key}' not found. Run ingestion first.[/red]")
         return
 
     def _on_interrupt(sig, frame):
@@ -498,7 +498,7 @@ def run_augment(
         console.print(f"[red]Aucun track trouvé pour '{tracks}'.[/red]")
         return
 
-    # Backfill automatique si tracking absent
+    # Automatic backfill if tracking is missing
     needs_backfill = (
         "rir_augmented" not in df_all.columns
         or df_all["rir_augmented"].apply(

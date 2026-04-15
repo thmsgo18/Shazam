@@ -1,9 +1,9 @@
 """
 src/index/build_index.py
 
-Construction et gestion de l'index FAISS.
-Supporte aussi HNSW et IVF.
-Responsable : Personne A
+Construction and management of the FAISS index.
+Also supports HNSW and IVF.
+Responsible: Person A
 """
 
 from __future__ import annotations
@@ -19,24 +19,24 @@ import pandas as pd
 
 def build_index(embeddings: np.ndarray, index_type: str = "flat") -> faiss.Index:
     """
-    Construit un index FAISS, selon le type choisi, à partir d'une matrice d'embeddings.
+    Builds a FAISS index, according to the chosen type, from an embeddings matrix.
 
     Args:
-        embeddings: matrice de shape (N, D) en float32.
-                    Les vecteurs doivent être normalisés en L2.
-        index_type: "flat", "hnsw" ou "ivf"
+        embeddings: matrix of shape (N, D) in float32.
+                    Vectors must be L2 normalized.
+        index_type: "flat", "hnsw" or "ivf"
 
     Returns:
-        Index FAISS prêt à la recherche (normalisé L2, similarité cosinus).
+        FAISS index ready for search (L2 normalized, cosine similarity).
     """
     
-    xb = embeddings.astype("float32") # Conversion en float32 pour FAISS
+    xb = embeddings.astype("float32") # Conversion to float32 for FAISS
 
-    # Normalisation des vecteurs en L2 pour similarité cosine
+    # L2 normalization of vectors for cosine similarity
     faiss.normalize_L2(xb)
 
-    # On crée l'index FlatIP
-    d = xb.shape[1] # Dim de l'embedding, permet de changer de méthode sans problèmes de dim.
+    # Create the FlatIP index
+    d = xb.shape[1] # Embedding dim, allows changing method without dim issues.
     N = len(xb)
 
     index_type = index_type.lower()
@@ -44,18 +44,18 @@ def build_index(embeddings: np.ndarray, index_type: str = "flat") -> faiss.Index
     if index_type == "flat" : 
         index = faiss.IndexFlatIP(d)
     elif index_type == "hnsw" : 
-        M = 32 # M : connectivité des graphes
+        M = 32 # M: graph connectivity
         index = faiss.IndexHNSWFlat(d, M)
-        index.hnsw.efConstruction = 40 # tuning pour la précision
+        index.hnsw.efConstruction = 40 # tuning for precision
     elif index_type == "ivf" :
-        nbList = max(1, int(np.sqrt(N))) # Nb de listes inversées : racine carrée du nb de vecteurs
+        nbList = max(1, int(np.sqrt(N))) # Nb of inverted lists: square root of nb of vectors
         quantizer = faiss.IndexFlatIP(d)
         index = faiss.IndexIVFFlat(quantizer, d, nbList, faiss.METRIC_INNER_PRODUCT)
         index.train(xb)
     else : 
-        raise ValueError(f"Index type unknwon : {index_type}. Possible choices : falt, hnsw, ivf") 
+        raise ValueError(f"Index type unknown: {index_type}. Possible choices: flat, hnsw, ivf") 
 
-    # Ajout des vecteurs
+    # Add vectors
     index.add(xb)
 
     return index
@@ -63,42 +63,42 @@ def build_index(embeddings: np.ndarray, index_type: str = "flat") -> faiss.Index
 
 def save_index(index: faiss.Index, path: Path) -> None:
     """
-    Sauvegarde un index FAISS sur disque.
+    Saves a FAISS index to disk.
 
     Args:
-        index: index FAISS à sauvegarder.
-        path:  chemin de destination (ex: data/index/index_mfcc.faiss).
+        index: FAISS index to save.
+        path:  destination path (e.g.: data/index/index_mfcc.faiss).
     """
     
     path.parent.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(path))
-    print(f"Index saved successfully in : {path}")
+    print(f"Index saved successfully at: {path}")
 
 
 def load_index(path: Path) -> faiss.Index:
     """
-    Charge un index FAISS depuis le disque.
+    Loads a FAISS index from disk.
 
     Args:
-        path: chemin vers le fichier .faiss.
+        path: path to the .faiss file.
 
     Returns:
-        Index FAISS chargé.
+        Loaded FAISS index.
     """
     
     if not path.exists() : 
-        raise FileNotFoundError(f"The index doesn't exist at : {path}")
+        raise FileNotFoundError(f"The index doesn't exist at: {path}")
     
     return faiss.read_index(str(path))
 
 
 def _build_for_method(collection_key: str, index_type: str, chroma_client) -> None:
     """
-    Construit et sauvegarde l'index FAISS pour une collection ChromaDB donnée.
+    Builds and saves the FAISS index for a given ChromaDB collection.
 
     Args:
-        collection_key: clé méthode+modèle, ex. "clap_larger_clap_music" ou "mfcc".
-                        C'est aussi le nom de la collection ChromaDB.
+        collection_key: method+model key, e.g. "clap_larger_clap_music" or "mfcc".
+                        Also the name of the ChromaDB collection.
     """
     import src.config as config
 
@@ -109,17 +109,17 @@ def _build_for_method(collection_key: str, index_type: str, chroma_client) -> No
     try:
         collection = chroma_client.get_collection(name=collection_key)
     except Exception:
-        print(f"[build_index] Collection '{collection_key}' introuvable dans ChromaDB — ignorée.")
+        print(f"[build_index] Collection '{collection_key}' not found in ChromaDB — ignored.")
         return
 
     n = collection.count()
     if n == 0:
-        print(f"[build_index] La collection '{collection_key}' est vide — ignorée.")
+        print(f"[build_index] Collection '{collection_key}' is empty — ignored.")
         return
 
-    print(f"\n[build_index] ── Collection : {collection_key} | {n} segments ──")
+    print(f"\n[build_index] ── Collection: {collection_key} | {n} segments ──")
 
-    # Pagination pour éviter l'erreur SQLite "too many SQL variables"
+    # Pagination to avoid SQLite "too many SQL variables" error
     PAGE = 500
     data: dict = {"embeddings": [], "metadatas": []}
     offset = 0
@@ -135,23 +135,23 @@ def _build_for_method(collection_key: str, index_type: str, chroma_client) -> No
 
     embeddings = np.array(data["embeddings"], dtype=np.float32)
 
-    # Sauvegarder l'ordre des segments (indispensable pour que searcher.py
-    # puisse traduire un indice FAISS en track_id)
-    df_order = pd.DataFrame(data["metadatas"])   # colonnes : track_id, start_s
+    # Save the order of segments (essential for searcher.py
+    # to translate a FAISS index into track_id)
+    df_order = pd.DataFrame(data["metadatas"])   # columns : track_id, start_s
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df_order.to_parquet(order_path, index=False)
-    print(f"[build_index] Ordre des segments sauvegardé → {order_path}")
+    print(f"[build_index] Segments order saved → {order_path}")
 
-    print(f"[build_index] {len(embeddings)} vecteurs, dim={embeddings.shape[1]}")
+    print(f"[build_index] {len(embeddings)} vectors, dim={embeddings.shape[1]}")
     index = build_index(embeddings, index_type=index_type)
     save_index(index, out_path)
 
-    # Vérification finale
+    # Final verification
     check_index = load_index(out_path)
     assert check_index.ntotal == len(embeddings), (
-        f"Mismatch : {check_index.ntotal} vecteurs dans l'index vs {len(embeddings)} attendus"
+        f"Mismatch: {check_index.ntotal} vectors in index vs {len(embeddings)} expected"
     )
-    print(f"[build_index] ✓ {check_index.ntotal} vecteurs indexés → {out_path}")
+    print(f"[build_index] ✓ {check_index.ntotal} vectors indexed → {out_path}")
 
 
 if __name__ == "__main__":
@@ -161,12 +161,12 @@ if __name__ == "__main__":
     import chromadb
     import src.config as config
 
-    parser = argparse.ArgumentParser(description="Construit l'index FAISS depuis ChromaDB.")
+    parser = argparse.ArgumentParser(description="Builds the FAISS index from ChromaDB.")
     parser.add_argument(
         "--method",
         default=None,
-        help="Méthode d'embedding à indexer (mfcc, clap, muq). "
-             "Si non spécifié, toutes les collections disponibles sont indexées.",
+        help="Embedding method to index (mfcc, clap, muq). "
+             "If not specified, all available collections are indexed.",
     )
     args = parser.parse_args()
 
@@ -174,19 +174,19 @@ if __name__ == "__main__":
     chroma_client = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
 
     if args.method:
-        # L'utilisateur passe "clap", "mfcc", "muq" → on résout la clé collection
+        # The user passes "clap", "mfcc", "muq" → the collection key is resolved
         collection_keys = [config.get_collection_key(args.method)]
-        print(f"[build_index] Clé collection résolue : {collection_keys[0]}")
+        print(f"[build_index] Collection key resolved: {collection_keys[0]}")
     else:
-        # Toutes les collections présentes dans ChromaDB
+        # All collections present in ChromaDB
         collection_keys = [c.name for c in chroma_client.list_collections()]
         if not collection_keys:
-            print("[build_index] Aucune collection trouvée dans ChromaDB.")
-            print("[build_index] Lance d'abord : python manage.py ingest")
+            print("[build_index] No collections found in ChromaDB.")
+            print("[build_index] Run first: python manage.py ingest")
             sys.exit(1)
-        print(f"[build_index] Collections disponibles : {collection_keys}")
+        print(f"[build_index] Available collections: {collection_keys}")
 
     for key in collection_keys:
         _build_for_method(key, index_type, chroma_client)
 
-    print("\n[build_index] Terminé.")
+    print("\n[build_index] Done.")

@@ -1,14 +1,14 @@
 """
 src/maintenance/delete_rir.py
 
-Suppression des vecteurs RIR d'une méthode d'embedding :
-  1. Scan ChromaDB → collecte tous les IDs contenant "_rir_"
-  2. Suppression par batches dans ChromaDB
-  3. Réinitialise la colonne rir_augmented dans metadata.parquet
+Deletion of RIR vectors from an embedding method:
+  1. Scan ChromaDB → collect all IDs containing "_rir_"
+  2. Batch deletion in ChromaDB
+  3. Reset the rir_augmented column in metadata.parquet
 
-Ne touche PAS aux vecteurs originaux, ni aux fingerprints, ni aux autres méthodes.
+Does NOT touch the original vectors, nor the fingerprints, nor other methods.
 
-Point d'entrée public : run_delete_rir(method, dry_run, yes)
+Public entry point: run_delete_rir(method, dry_run, yes)
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ BATCH_DELETE = 500
 # ---------------------------------------------------------------------------
 
 def _scan_rir_ids(collection) -> list[str]:
-    """Retourne tous les IDs RIR présents dans la collection."""
+    """Returns all RIR IDs present in the collection."""
     PAGE   = 1000
     offset = 0
     rir_ids: list[str] = []
@@ -55,7 +55,7 @@ def _scan_rir_ids(collection) -> list[str]:
         console=console,
         transient=True,
     ) as prog:
-        task = prog.add_task("Scan ChromaDB…", total=None)
+        task = prog.add_task("Scanning ChromaDB…", total=None)
         while True:
             page = collection.get(limit=PAGE, offset=offset, include=[])
             ids  = page["ids"]
@@ -73,7 +73,7 @@ def _scan_rir_ids(collection) -> list[str]:
 
 
 def _delete_from_chroma(collection, ids: list[str], dry_run: bool) -> int:
-    """Supprime les IDs par batches. Retourne le nombre supprimé."""
+    """Deletes IDs in batches. Returns the number deleted."""
     if not ids:
         return 0
     if dry_run:
@@ -89,7 +89,7 @@ def _delete_from_chroma(collection, ids: list[str], dry_run: bool) -> int:
         TimeElapsedColumn(),
         console=console,
     ) as prog:
-        task = prog.add_task("Suppression ChromaDB…", total=len(ids))
+        task = prog.add_task("Deleting from ChromaDB…", total=len(ids))
         for i in range(0, len(ids), BATCH_DELETE):
             batch = ids[i: i + BATCH_DELETE]
             collection.delete(ids=batch)
@@ -100,7 +100,7 @@ def _delete_from_chroma(collection, ids: list[str], dry_run: bool) -> int:
 
 
 def _clear_metadata(meta_path: Path, collection_key: str, dry_run: bool) -> int:
-    """Supprime collection_key de rir_augmented. Retourne le nombre de tracks mis à jour."""
+    """Removes collection_key from rir_augmented. Returns the number of updated tracks."""
     if not meta_path.exists():
         return 0
 
@@ -131,13 +131,13 @@ def _clear_metadata(meta_path: Path, collection_key: str, dry_run: bool) -> int:
         try:
             atomic_write_parquet(meta_path, df)
         except Exception as exc:
-            console.print(f"[red]Erreur écriture metadata : {exc}[/red]")
+            console.print(f"[red]Error writing metadata: {exc}[/red]")
 
     return updated
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_delete_rir(
@@ -146,12 +146,12 @@ def run_delete_rir(
     yes: bool = False,
 ) -> None:
     """
-    Supprime tous les vecteurs RIR d'une méthode dans ChromaDB + metadata.
+    Deletes all RIR vectors for a method in ChromaDB + metadata.
 
     Args:
-        method:  méthode d'embedding (mfcc / clap / muq / mert).
-        dry_run: simule l'opération sans rien supprimer.
-        yes:     confirme sans demander.
+        method:  embedding method (mfcc / clap / muq / mert).
+        dry_run: simulates the operation without deleting anything.
+        yes:     confirms without asking.
     """
     import click
 
@@ -159,10 +159,10 @@ def run_delete_rir(
     meta_path      = ROOT / config.METADATA_PATH
 
     console.print(Panel(
-        f"[bold]Méthode     :[/bold] [cyan]{method}[/cyan]\n"
+        f"[bold]Method      :[/bold] [cyan]{method}[/cyan]\n"
         f"[bold]Collection  :[/bold] [cyan]{collection_key}[/cyan]\n"
         f"[bold]Dry-run     :[/bold] [cyan]{dry_run}[/cyan]",
-        title="[bold red]Suppression RIR[/bold red]",
+        title="[bold red]RIR Deletion[/bold red]",
         expand=False,
     ))
 
@@ -170,31 +170,31 @@ def run_delete_rir(
     try:
         collection = chroma_client.get_collection(name=collection_key)
     except Exception:
-        console.print(f"[red]Collection '{collection_key}' introuvable.[/red]")
+        console.print(f"[red]Collection '{collection_key}' not found.[/red]")
         sys.exit(1)
 
     total_before = collection.count()
     console.print(
-        f"  Collection [cyan]{collection_key}[/cyan] : "
-        f"[white]{total_before:,}[/white] vecteurs au total\n"
+        f"  Collection [cyan]{collection_key}[/cyan]: "
+        f"[white]{total_before:,}[/white] total vectors\n"
     )
 
-    console.print("[yellow]Scan des IDs RIR…[/yellow]")
+    console.print("[yellow]Scanning RIR IDs…[/yellow]")
     rir_ids = _scan_rir_ids(collection)
 
     if not rir_ids:
-        console.print("[green]Aucun vecteur RIR trouvé dans ChromaDB.[/green]")
-        console.print("[yellow]Vérification metadata.parquet…[/yellow]")
+        console.print("[green]No RIR vector found in ChromaDB.[/green]")
+        console.print("[yellow]Checking metadata.parquet…[/yellow]")
         updated_tracks = _clear_metadata(meta_path, collection_key, dry_run=False)
         if updated_tracks:
             console.print(
-                f"[green]✓ metadata.parquet nettoyé ({updated_tracks} tracks).[/green]"
+                f"[green]✓ metadata.parquet cleaned ({updated_tracks} tracks).[/green]"
             )
         else:
-            console.print("[dim]metadata.parquet déjà propre.[/dim]")
+            console.print("[dim]metadata.parquet is already clean.[/dim]")
         return
 
-    # Stats par RIR name
+    # Stats per RIR name
     rir_name_counts: dict[str, int] = {}
     for id_ in rir_ids:
         parts = id_.split("_rir_", 1)
@@ -212,44 +212,44 @@ def run_delete_rir(
 
     pct = len(rir_ids) / total_before * 100 if total_before else 0
     console.print(
-        f"  → [red]{len(rir_ids):,}[/red] vecteurs RIR "
-        f"([red]{pct:.1f}%[/red] de la collection)\n"
+        f"  → [red]{len(rir_ids):,}[/red] RIR vectors "
+        f"([red]{pct:.1f}%[/red] of the collection)\n"
     )
 
     if dry_run:
-        console.print("[dim]Mode dry-run : aucune modification.[/dim]")
+        console.print("[dim]Dry-run mode: no changes made.[/dim]")
         return
 
     if not yes:
         click.confirm(
-            f"Supprimer {len(rir_ids):,} vecteurs RIR de '{collection_key}' ?",
+            f"Delete {len(rir_ids):,} RIR vectors from '{collection_key}'?",
             abort=True,
         )
         console.print()
 
-    console.print("[yellow]Suppression dans ChromaDB…[/yellow]")
+    console.print("[yellow]Deleting in ChromaDB…[/yellow]")
     deleted     = _delete_from_chroma(collection, rir_ids, dry_run=False)
     total_after = collection.count()
     console.print(
-        f"[green]✓ {deleted:,} vecteurs supprimés.[/green] "
-        f"Collection : {total_after:,} vecteurs restants.\n"
+        f"[green]✓ {deleted:,} vectors deleted.[/green] "
+        f"Collection: {total_after:,} vectors remaining.\n"
     )
 
-    console.print("[yellow]Mise à jour metadata.parquet…[/yellow]")
+    console.print("[yellow]Updating metadata.parquet…[/yellow]")
     updated_tracks = _clear_metadata(meta_path, collection_key, dry_run=False)
     if updated_tracks:
         console.print(
-            f"[green]✓ rir_augmented réinitialisé pour {updated_tracks} track(s).[/green]\n"
+            f"[green]✓ rir_augmented reset for {updated_tracks} track(s).[/green]\n"
         )
     else:
-        console.print("[dim]Aucune entrée rir_augmented à nettoyer.[/dim]\n")
+        console.print("[dim]No rir_augmented entry to clean.[/dim]\n")
 
     console.print(Panel(
-        f"Vecteurs RIR supprimés  : [red]{deleted:,}[/red]\n"
-        f"Vecteurs restants       : [green]{total_after:,}[/green]\n"
-        f"Tracks metadata nettoyés: [green]{updated_tracks}[/green]\n\n"
-        f"[dim]Pense à reconstruire l'index FAISS :[/dim]\n"
+        f"RIR vectors deleted     : [red]{deleted:,}[/red]\n"
+        f"Vectors remaining       : [green]{total_after:,}[/green]\n"
+        f"Metadata tracks cleaned : [green]{updated_tracks}[/green]\n\n"
+        f"[dim]Remember to rebuild the FAISS index:[/dim]\n"
         f"[dim]python manage.py rebuild --what index[/dim]",
-        title="[bold green]Terminé[/bold green]",
+        title="[bold green]Finished[/bold green]",
         expand=False,
     ))

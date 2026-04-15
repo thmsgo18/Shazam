@@ -1,8 +1,9 @@
 """
 src/utils/metadata.py
 
-Écriture atomique de fichiers de données (parquet, pickle).
-Garantit qu'un crash pendant l'écriture ne corrompt pas le fichier existant.
+
+Atomic writing of data files (parquet, pickle).
+Ensures that a crash during writing does not corrupt the existing file.
 """
 
 from __future__ import annotations
@@ -15,14 +16,16 @@ from pathlib import Path
 
 def atomic_write_parquet(path: Path, df) -> None:
     """
-    Écrit un DataFrame pandas en parquet de manière atomique.
+    Atomically writes a pandas DataFrame to parquet.
 
-    Utilise un fichier temporaire + os.replace (atomique sur tous les OS).
-    En cas de crash pendant l'écriture, l'ancien fichier reste intact.
+
+    Uses a temporary file + os.replace (atomic on all OS).
+    In case of a crash during writing, the old file remains intact.
+
 
     Args:
-        path: chemin de destination du fichier .parquet.
-        df:   DataFrame pandas à écrire.
+        path: destination path of the .parquet file.
+        df:   pandas DataFrame to write.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,14 +41,14 @@ def atomic_write_parquet(path: Path, df) -> None:
             pass
         raise
 
-
 def atomic_write_pickle(path: Path, obj: object) -> None:
     """
-    Écrit un objet Python en pickle de manière atomique.
+    Atomically writes a Python object to pickle.
+
 
     Args:
-        path: chemin de destination du fichier .pkl.
-        obj:  objet Python à sérialiser.
+        path: destination path of the .pkl file.
+        obj:  Python object to serialize.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

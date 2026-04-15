@@ -1,24 +1,24 @@
 """
 src/maintenance/check.py
 
-Vérification de la cohérence des données (ChromaDB, FAISS, fingerprints, metadata).
+Data consistency check (ChromaDB, FAISS, fingerprints, metadata).
 
-Checks critiques :
-  [C1] Dimension embeddings cohérente
-  [C2] NaN / Inf dans les embeddings
-  [C3] ChromaDB ↔ FAISS order parquet (même nombre de segments)
-  [C5] FAISS index ↔ ChromaDB (même nombre de vecteurs)
-  [C6] Segments orphelins (dans ChromaDB mais absents de metadata.parquet)
-  [C7] Tracks avec embedding incomplet (< 80% segments attendus)
+Critical checks:
+  [C1] Consistent embedding dimension
+  [C2] NaN / Inf in embeddings
+  [C3] ChromaDB ↔ FAISS order parquet (same number of segments)
+  [C5] FAISS index ↔ ChromaDB (same number of vectors)
+  [C6] Orphan segments (in ChromaDB but missing from metadata.parquet)
+  [C7] Tracks with incomplete embedding (< 80% expected segments)
 
-Checks qualité :
-  [Q1] Duration aberrante (≤ 0s ou > 10min)
-  [Q2] start_s des segments > duration du track
-  [Q3] Fingerprint complètement vide
-  [Q4] Fingerprint outlier vers le bas (IQR par tranche de durée)
-  [FP] Tracks sans fingerprint
+Quality checks:
+  [Q1] Abnormal duration (≤ 0s or > 10min)
+  [Q2] start_s of segments > track duration
+  [Q3] Completely empty fingerprint
+  [Q4] Fingerprint outlier downward (IQR by duration bucket)
+  [FP] Tracks without fingerprint
 
-Point d'entrée public : run_check(method, details, metadata, purge, purge_missing_fp, yes)
+Public entry point: run_check(method, details, metadata, purge, purge_missing_fp, yes)
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 def _fmt_dur(seconds: float) -> str:
-    """Formate des secondes en Xm Ys."""
+    """Formats seconds as Xm Ys."""
     m, s = divmod(int(seconds), 60)
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
@@ -75,8 +75,8 @@ def _fp_count(db_path: Path) -> int:
 
 def _chroma_get_all(collection, include: list[str]) -> dict:
     """
-    Récupère tous les documents d'une collection ChromaDB par pages de 500.
-    Évite l'erreur SQLite 'too many SQL variables' sur les grandes collections.
+    Fetches all documents from a ChromaDB collection in pages of 500.
+    Avoids the SQLite 'too many SQL variables' error on large collections.
     """
     PAGE   = 500
     offset = 0
@@ -96,7 +96,7 @@ def _chroma_get_all(collection, include: list[str]) -> dict:
 
 
 def _get_chroma_collection(method: str) -> tuple[chromadb.Collection | None, str]:
-    """Retourne (collection, "") si OK, ou (None, message_erreur) si introuvable."""
+    """Returns (collection, "") if OK, or (None, error_message) if not found."""
     try:
         client     = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
         collection = client.get_collection(name=method)
@@ -106,7 +106,7 @@ def _get_chroma_collection(method: str) -> tuple[chromadb.Collection | None, str
 
 
 def _collection_family(collection_key: str) -> str:
-    """Déduit la famille d'embedding depuis une clé de collection ChromaDB."""
+    """Infers the embedding family from a ChromaDB collection key."""
     for family in ("mfcc", "clap", "muq", "mert"):
         if collection_key == family or collection_key.startswith(f"{family}_"):
             return family
@@ -114,7 +114,7 @@ def _collection_family(collection_key: str) -> str:
 
 
 def _expected_embedding_dim(collection_key: str) -> int | None:
-    """Retourne la dimension attendue pour une clé de collection donnée."""
+    """Returns the expected embedding dimension for a given collection key."""
     family = _collection_family(collection_key)
     if family == "mfcc":
         return 2 * config.N_MFCC
@@ -128,7 +128,7 @@ def _expected_embedding_dim(collection_key: str) -> int | None:
 
 
 def _embedded_method_matches_collection(method_key, collection_key: str) -> bool:
-    """Vrai si une entrée embedded_methods correspond à la collection ChromaDB."""
+    """True if an embedded_methods entry matches the ChromaDB collection."""
     if not isinstance(method_key, str):
         return False
     if method_key == "mfcc":
@@ -149,9 +149,9 @@ def _embedded_method_matches_collection(method_key, collection_key: str) -> bool
 
 @dataclass
 class Warning:
-    level:    str                          # "CRITIQUE" | "QUALITE"
+    level:    str                          # "CRITICAL" | "QUALITY"
     code:     str                          # "C1", "Q1", "FP", etc.
-    label:    str                          # Description courte
+    label:    str                          # Short description
     method:   str
     track_id: str | None = None
     artist:   str | None = None
@@ -165,7 +165,7 @@ class Warning:
 # ---------------------------------------------------------------------------
 
 def check_method(method: str) -> list[Warning]:
-    """Retourne la liste des avertissements détectés pour une méthode d'embedding."""
+    """Returns the list of warnings detected for a given embedding method."""
     warns: list[Warning] = []
 
     fp_db      = ROOT / config.FINGERPRINTS_DB
@@ -173,77 +173,77 @@ def check_method(method: str) -> list[Warning]:
     index_path = ROOT / config.INDEX_DIR / f"index_{method}_{config.INDEX_TYPE}.faiss"
     order_path = ROOT / config.INDEX_DIR / f"segments_{method}.parquet"
 
-    # --- ChromaDB : collection obligatoire ---
+    # --- ChromaDB: collection is mandatory ---
     collection, err = _get_chroma_collection(method)
     if collection is None:
         warns.append(Warning(
-            level="CRITIQUE", code="MANQUANT", label="Collection ChromaDB manquante",
+            level="CRITICAL", code="MISSING", label="Missing ChromaDB collection",
             method=method,
-            metrics={"Méthode": method, "Erreur": err},
-            action="Lancer `python manage.py ingest` pour (re)créer la collection.",
+            metrics={"Method": method, "Error": err},
+            action="Run `python manage.py ingest` to (re)create the collection.",
         ))
         return warns
 
     n_segments = collection.count()
     if n_segments == 0:
         warns.append(Warning(
-            level="CRITIQUE", code="VIDE", label="Collection ChromaDB vide",
+            level="CRITICAL", code="EMPTY", label="Empty ChromaDB collection",
             method=method,
-            action="Lancer `python manage.py ingest` pour générer les embeddings.",
+            action="Run `python manage.py ingest` to generate the embeddings.",
         ))
         return warns
-
-    # Charger tous les embeddings + métadonnées (une seule fois pour tous les checks)
+    
+    # Load all embeddings + metadata once (reused across all checks)
     all_data = _chroma_get_all(collection, include=["embeddings", "metadatas"])
     emb      = np.array(all_data["embeddings"], dtype=np.float32)
 
-    # --- [C1] Dimension des embeddings ---
+   # --- [C1] Embedding dimension ---
     if emb.ndim != 2:
         warns.append(Warning(
-            level="CRITIQUE", code="C1", label="Embeddings malformés (pas 2D)",
+            level="CRITICAL", code="C1", label="Malformed embeddings (not 2D)",
             method=method,
-            metrics={"Shape observée": str(emb.shape)},
-            action="Re-générer les embeddings",
+            metrics={"Observed shape": str(emb.shape)},
+            action="Re-generate embeddings",
         ))
         return warns
 
     expected_dim = _expected_embedding_dim(method)
     if expected_dim is not None and emb.shape[1] != expected_dim:
         warns.append(Warning(
-            level="CRITIQUE", code="C1", label="Dimension embedding inattendue",
+            level="CRITICAL", code="C1", label="Unexpected embedding dimension",
             method=method,
             metrics={
-                "Dimension observée": str(emb.shape[1]),
-                "Dimension attendue": str(expected_dim),
-                **({"Config N_MFCC actuel": str(config.N_MFCC)} if _collection_family(method) == "mfcc" else {}),
+                "Observed dimension": str(emb.shape[1]),
+                "Expected dimension": str(expected_dim),
+                **({("Current config N_MFCC"): str(config.N_MFCC)} if _collection_family(method) == "mfcc" else {}),
             },
-            action="Vérifier config.py — si N_MFCC a changé, supprimer la collection et relancer",
+            action="Check config.py — if N_MFCC changed, delete the collection and re-run",
         ))
 
     # --- [C2] NaN / Inf ---
     if not np.isfinite(emb).all():
         n_bad = (~np.isfinite(emb)).any(axis=1).sum()
         warns.append(Warning(
-            level="CRITIQUE", code="C2", label="NaN ou Inf dans les embeddings",
+            level="CRITICAL", code="C2", label="NaN or Inf in embeddings",
             method=method,
-            metrics={"Vecteurs corrompus": f"{n_bad} / {len(emb)}"},
-            action="Identifier les tracks concernés et les re-télécharger",
+            metrics={"Corrupted vectors": f"{n_bad} / {len(emb)}"},
+            action="Identify affected tracks and re-download them",
         ))
 
-    # --- [C3] ChromaDB ↔ order parquet (si l'index a été construit) ---
+    # --- [C3] ChromaDB ↔ order parquet (if index was built) ---
     if order_path.exists():
         df_order = pd.read_parquet(order_path)
         if len(df_order) != n_segments:
             warns.append(Warning(
-                level="CRITIQUE", code="C3",
-                label="Order parquet désynchronisé avec ChromaDB",
+                level="CRITICAL", code="C3",
+                label="Order parquet out of sync with ChromaDB",
                 method=method,
                 metrics={
-                    "Segments dans ChromaDB":      str(n_segments),
-                    "Segments dans order parquet": str(len(df_order)),
-                    "Différence":                  str(abs(n_segments - len(df_order))),
+                    "Segments in ChromaDB":      str(n_segments),
+                    "Segments in order parquet": str(len(df_order)),
+                    "Difference":                str(abs(n_segments - len(df_order))),
                 },
-                action="Relancer `python manage.py rebuild --what index` pour reconstruire l'index.",
+                action="Run `python manage.py rebuild --what index` to rebuild the index.",
             ))
 
     # --- [C5] FAISS index ↔ ChromaDB ---
@@ -253,35 +253,35 @@ def check_method(method: str) -> list[Warning]:
             index = faiss.read_index(str(index_path))
             if index.ntotal != n_segments:
                 warns.append(Warning(
-                    level="CRITIQUE", code="C5", label="FAISS index désynchronisé",
+                    level="CRITICAL", code="C5", label="FAISS index out of sync",
                     method=method,
                     metrics={
-                        "Vecteurs dans FAISS":    str(index.ntotal),
-                        "Vecteurs dans ChromaDB": str(n_segments),
-                        "Différence":             str(abs(index.ntotal - n_segments)),
+                        "Vectors in FAISS":    str(index.ntotal),
+                        "Vectors in ChromaDB": str(n_segments),
+                        "Difference":          str(abs(index.ntotal - n_segments)),
                     },
-                    action="Relancer `python manage.py rebuild --what index`.",
+                    action="Run `python manage.py rebuild --what index`.",
                 ))
         except Exception as e:
             warns.append(Warning(
-                level="CRITIQUE", code="C5", label="FAISS index illisible",
+                level="CRITICAL", code="C5", label="FAISS index unreadable",
                 method=method,
-                metrics={"Erreur": str(e)},
-                action="Relancer `python manage.py rebuild --what index`.",
+                metrics={"Error": str(e)},
+                action="Run `python manage.py rebuild --what index`.",
             ))
     else:
         warns.append(Warning(
-            level="CRITIQUE", code="C5", label="FAISS index manquant",
+            level="CRITICAL", code="C5", label="FAISS index missing",
             method=method,
-            action="Relancer `python manage.py rebuild --what index`.",
+            action="Run `python manage.py rebuild --what index`.",
         ))
 
-    # --- Métadonnées ---
+    # --- Metadata ---
     if not meta_path.exists():
         warns.append(Warning(
-            level="CRITIQUE", code="META", label="metadata.parquet manquant",
+            level="CRITICAL", code="META", label="metadata.parquet missing",
             method=method,
-            action="Lancer `python manage.py ingest`.",
+            action="Run `python manage.py ingest`.",
         ))
         return warns
 
@@ -289,14 +289,14 @@ def check_method(method: str) -> list[Warning]:
         df_meta = pd.read_parquet(meta_path)
     except Exception as e:
         warns.append(Warning(
-            level="CRITIQUE", code="META", label="metadata.parquet illisible",
+            level="CRITICAL", code="META", label="metadata.parquet unreadable",
             method=method,
-            metrics={"Erreur": str(e)},
-            action="Vérifier data/processed/metadata.parquet",
+            metrics={"Error": str(e)},
+            action="Check data/processed/metadata.parquet",
         ))
         return warns
 
-    # Construire le mapping track_id → nombre de segments depuis ChromaDB
+    # Build mapping track_id → segment count from ChromaDB
     chroma_track_seg_counts: dict[str, int] = {}
     for m in all_data["metadatas"]:
         tid = m["track_id"]
@@ -305,24 +305,24 @@ def check_method(method: str) -> list[Warning]:
     chroma_track_ids = set(chroma_track_seg_counts.keys())
     meta_track_ids   = set(df_meta["track_id"].unique())
 
-    # --- [C6] Segments orphelins (dans ChromaDB mais absents de metadata) ---
+    # --- [C6] Orphan segments (in ChromaDB but missing from metadata) ---
     orphans = chroma_track_ids - meta_track_ids
     for oid in list(orphans)[:5]:
         warns.append(Warning(
-            level="CRITIQUE", code="C6", label="Segments orphelins (sans metadata)",
+            level="CRITICAL", code="C6", label="Orphan segments (no metadata)",
             method=method,
             track_id=oid,
             metrics={"track_id": oid[:16] + "..."},
-            action="Supprimer les segments de ce track puis relancer `python manage.py ingest`.",
+            action="Delete this track's segments then run `python manage.py ingest`.",
         ))
     if len(orphans) > 5:
         warns.append(Warning(
-            level="CRITIQUE", code="C6",
-            label=f"… et {len(orphans) - 5} autre(s) track(s) orphelins",
+            level="CRITICAL", code="C6",
+            label=f"… and {len(orphans) - 5} more orphan track(s)",
             method=method,
         ))
 
-    # --- [C7] Embedding incomplet (< 80% des segments attendus) ---
+    # --- [C7] Incomplete embedding (< 80% of expected segments) ---
     if "duration" in df_meta.columns:
         win_s = config.SEGMENT_WIN_S
         hop_s = config.SEGMENT_HOP_S
@@ -334,43 +334,43 @@ def check_method(method: str) -> list[Warning]:
             expected = int(max(0, (duration - win_s) / hop_s)) + 1
             if expected > 0 and actual / expected < 0.8:
                 warns.append(Warning(
-                    level="CRITIQUE", code="C7", label="Embedding incomplet",
+                    level="CRITICAL", code="C7", label="Incomplete embedding",
                     method=method,
                     track_id=tid,
                     artist=str(row["artist"].values[0]) if "artist" in row else None,
                     title=str(row["title"].values[0])   if "title"  in row else None,
                     metrics={
-                        "Segments réels / attendus": f"{actual} / {expected}  ({actual/expected:.0%})",
-                        "Durée du track":            _fmt_dur(duration),
+                        "Actual / expected segments": f"{actual} / {expected}  ({actual/expected:.0%})",
+                        "Track duration":             _fmt_dur(duration),
                     },
-                    action="Relancer `python manage.py ingest` (le track sera re-traité automatiquement).",
+                    action="Run `python manage.py ingest` (track will be re-processed automatically).",
                 ))
 
-    # --- [Q1] Durée aberrante ---
+    # --- [Q1] Abnormal duration ---
     if "duration" in df_meta.columns:
         bad_dur = df_meta[(df_meta["duration"] <= 0) | (df_meta["duration"] > 600)]
         for row in bad_dur.itertuples():
             n_segs = chroma_track_seg_counts.get(row.track_id, 0)
             warns.append(Warning(
-                level="QUALITE", code="Q1", label="Durée aberrante",
+                level="QUALITY", code="Q1", label="Abnormal duration",
                 method=method,
                 track_id=row.track_id,
                 artist=str(getattr(row, "artist", "?")),
                 title=str(getattr(row, "title", "?")),
                 metrics={
-                    "Durée":            f"{row.duration:.0f}s  ({_fmt_dur(row.duration)})",
-                    "Seuil normal":     "entre 1s et 10min (600s)",
-                    "Segments générés": str(n_segs),
+                    "Duration":          f"{row.duration:.0f}s  ({_fmt_dur(row.duration)})",
+                    "Expected range":    "between 1s and 10min (600s)",
+                    "Generated segments": str(n_segs),
                 },
                 action=(
-                    "Supprimer le track (--purge) et le re-télécharger"
+                    "Delete the track (--purge) and re-download it"
                     if row.duration > 600 else
-                    "Durée nulle ou négative — fichier audio probablement corrompu"
+                    "Zero or negative duration — audio file is likely corrupted"
                 ),
             ))
 
-    # --- [Q2] start_s > durée du track ---
-    # Tolérance d'une fenêtre de segment (SEGMENT_WIN_S) pour les écarts yt-dlp / librosa
+    # --- [Q2] start_s > track duration ---
+    # Tolerance of one segment window (SEGMENT_WIN_S) for yt-dlp / librosa discrepancies
     Q2_TOLERANCE_S = config.SEGMENT_WIN_S
     if "duration" in df_meta.columns:
         for m_meta in all_data["metadatas"]:
@@ -382,21 +382,21 @@ def check_method(method: str) -> list[Warning]:
             duration = float(row["duration"].values[0])
             if start_s > duration + Q2_TOLERANCE_S:
                 warns.append(Warning(
-                    level="QUALITE", code="Q2", label="Segment hors durée du track",
+                    level="QUALITY", code="Q2", label="Segment beyond track duration",
                     method=method,
                     track_id=tid,
                     artist=str(row["artist"].values[0]) if "artist" in row else None,
                     title=str(row["title"].values[0])   if "title"  in row else None,
                     metrics={
                         "start_s":        f"{start_s:.1f}s",
-                        "Durée du track": f"{duration:.1f}s",
-                        "Écart":          f"{start_s - duration:.1f}s  (tolérance : {Q2_TOLERANCE_S}s)",
+                        "Track duration": f"{duration:.1f}s",
+                        "Gap":            f"{start_s - duration:.1f}s  (tolerance: {Q2_TOLERANCE_S}s)",
                     },
-                    action="Supprimer le track (`--purge`) puis relancer `python manage.py ingest`.",
+                    action="Delete the track (`--purge`) then run `python manage.py ingest`.",
                 ))
-                break  # un seul warning par track
+                break  # one warning per track only
 
-    # --- Tracks marqués traités mais sans segments dans ChromaDB ---
+    # --- Tracks marked as processed but missing segments in ChromaDB ---
     if "embedded_methods" in df_meta.columns:
         should_have = set(
             df_meta[df_meta["embedded_methods"].apply(
@@ -407,51 +407,51 @@ def check_method(method: str) -> list[Warning]:
         for tid in list(missing_segs)[:5]:
             row = df_meta[df_meta["track_id"] == tid]
             warns.append(Warning(
-                level="CRITIQUE", code="C6b",
-                label="Track marqué traité mais sans segments",
+                level="CRITICAL", code="C6b",
+                label="Track marked as processed but has no segments",
                 method=method,
                 track_id=tid,
                 artist=str(row["artist"].values[0]) if not row.empty and "artist" in row else None,
                 title=str(row["title"].values[0])   if not row.empty and "title"  in row else None,
                 metrics={"track_id": tid[:16] + "..."},
-                action="Supprimer via `--purge` puis relancer `python manage.py ingest`.",
+                action="Delete via `--purge` then run `python manage.py ingest`.",
             ))
 
     # --- Fingerprints ---
     fp_stats = _fp_load_stats(fp_db)  # {track_id: n_hashes}
 
-    # [Q3] Fingerprint vide (0 hash)
+    # [Q3] Empty fingerprint (0 hashes)
     for tid in [t for t, n in fp_stats.items() if n == 0][:5]:
         row = df_meta[df_meta["track_id"] == tid]
         warns.append(Warning(
-            level="QUALITE", code="Q3", label="Fingerprint vide (0 hash)",
+            level="QUALITY", code="Q3", label="Empty fingerprint (0 hashes)",
             method=method,
             track_id=tid,
             artist=str(row["artist"].values[0]) if not row.empty and "artist" in row else None,
             title=str(row["title"].values[0])   if not row.empty and "title"  in row else None,
             metrics={"Hashes": "0"},
-            action="Re-télécharger si la qualité audio est suspecte (--purge)",
+            action="Re-download if audio quality is suspect (--purge)",
         ))
 
-    # [FP] Tracks sans fingerprint
+    # [FP] Tracks without fingerprint
     missing_fp = chroma_track_ids - set(fp_stats.keys())
     if missing_fp:
         n_total = len(chroma_track_ids)
         warns.append(Warning(
-            level="QUALITE", code="FP", label="Fingerprints manquants",
+            level="QUALITY", code="FP", label="Missing fingerprints",
             method=method,
             metrics={
-                "Tracks sans fingerprint": (
+                "Tracks without fingerprint": (
                     f"{len(missing_fp)} / {n_total}  ({len(missing_fp)/n_total:.0%})"
                 ),
             },
             action=(
-                "Stage 2 (re-ranking Shazam) inopérant pour ces tracks.\n"
-                "Pour recalculer : utiliser --purge-missing-fp puis relancer `python manage.py ingest`."
+                "Stage 2 (Shazam re-ranking) inoperative for these tracks.\n"
+                "To recompute: use --purge-missing-fp then run `python manage.py ingest`."
             ),
         ))
 
-    # [Q4] Fingerprint outlier (IQR par tranche de durée)
+    # [Q4] Poor fingerprint outlier (IQR by duration bucket)
     if "duration" in df_meta.columns:
         rows = []
         for tid, n_hashes in fp_stats.items():
@@ -483,25 +483,25 @@ def check_method(method: str) -> list[Warning]:
                 lower  = q1 - 2.5 * iqr
                 for r in group[group["n_hashes"] < lower].itertuples():
                     warns.append(Warning(
-                        level="QUALITE", code="Q4",
-                        label="Fingerprint anormalement pauvre",
+                        level="QUALITY", code="Q4",
+                        label="Abnormally sparse fingerprint",
                         method=method,
                         track_id=r.track_id,
                         artist=r.artist,
                         title=r.title,
                         metrics={
-                            "Hashes":            str(r.n_hashes),
-                            "Médiane du groupe": f"{median:.0f}",
-                            "Durée":             _fmt_dur(r.duration),
+                            "Hashes":         str(r.n_hashes),
+                            "Group median":   f"{median:.0f}",
+                            "Track duration": _fmt_dur(r.duration),
                         },
-                        action="Re-télécharger si la qualité audio est suspecte (--purge)",
+                        action="Re-download if audio quality is suspect (--purge)",
                     ))
 
     return warns
 
 
 # ---------------------------------------------------------------------------
-# Résumé par méthode (léger, sans check_method complet)
+# Per-method summary (lightweight, without full check_method)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -510,18 +510,18 @@ class MethodSummary:
     n_segments:   int
     n_tracks:     int
     n_incomplete: int    # embeddings < 80%
-    n_fp:         int    # fingerprints présents
-    n_fp_total:   int    # tracks avec embeddings (dénominateur fp)
-    n_fp_missing: int    # tracks sans fingerprint
-    n_fp_empty:   int    # fingerprints vides (0 hash)
-    n_fp_poor:    int    # fingerprints outliers (Q4)
-    n_crit:       int    # nb warnings critiques
-    n_qual:       int    # nb warnings qualité
+    n_fp:         int    # fingerprints present
+    n_fp_total:   int    # tracks with embeddings (fp denominator)
+    n_fp_missing: int    # tracks without fingerprint
+    n_fp_empty:   int    # empty fingerprints (0 hashes)
+    n_fp_poor:    int    # fingerprint outliers (Q4)
+    n_crit:       int    # number of critical warnings
+    n_qual:       int    # number of quality warnings
     index_ok:     bool
 
 
 def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
-    """Collecte les stats résumées pour une méthode (rapide)."""
+    """Collects summary stats for a method (fast)."""
     fp_db      = ROOT / config.FINGERPRINTS_DB
     index_path = ROOT / config.INDEX_DIR / f"index_{method}_{config.INDEX_TYPE}.faiss"
 
@@ -535,7 +535,7 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
 
     n_segments = collection.count()
 
-    # Compter tracks et embeddings incomplets
+    # Count tracks and incomplete embeddings
     n_tracks     = 0
     n_incomplete = 0
     all_data     = None
@@ -575,7 +575,7 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
     n_fp         = n_fp_total - n_fp_missing
     n_fp_empty   = sum(1 for tid in fp_stats if fp_stats[tid] == 0 and tid in chroma_ids)
 
-    # Q4 — fingerprints pauvres (compte rapide, pas de détail)
+    # Q4 — poor fingerprints (fast count, no detail)
     n_fp_poor = 0
     if df_meta is not None and "duration" in df_meta.columns:
         rows = []
@@ -601,7 +601,7 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
                 lower = q1 - 2.5 * (q3 - q1)
                 n_fp_poor += int((grp["n_hashes"] < lower).sum())
 
-    # Vérifier l'index FAISS
+    # Check FAISS index
     index_ok = False
     if index_path.exists():
         try:
@@ -611,7 +611,7 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
         except Exception:
             index_ok = False
 
-    # Compter warnings critiques/qualité (rapide : juste les flags déjà calculés)
+    # Count critical/quality warnings (fast: use already-computed flags)
     n_crit = int(n_incomplete > 0) + int(not index_ok and n_segments > 0)
     n_qual = int(n_fp_missing > 0) + int(n_fp_empty > 0) + int(n_fp_poor > 0)
 
@@ -631,12 +631,13 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
     )
 
 
+
 # ---------------------------------------------------------------------------
-# Vue résumé (défaut)
+# Summary view (default)
 # ---------------------------------------------------------------------------
 
 def _render_summary(methods: list[str]) -> None:
-    """Affiche le résumé global en deux blocs : audio/embeddings + métadonnées."""
+    """Displays the global summary in two blocks: audio/embeddings + metadata."""
     meta_path = PROCESSED_DIR / "metadata.parquet"
 
     df_meta: pd.DataFrame | None = None
@@ -648,17 +649,17 @@ def _render_summary(methods: list[str]) -> None:
         except Exception:
             pass
 
-    # ── BLOC 1 : Audio & Embeddings ─────────────────────────────────────────
+    # ── BLOCK 1: Audio & Embeddings ──────────────────────────────────────────
     console.print()
     console.rule("[bold cyan]Audio & Embeddings[/bold cyan]")
     console.print()
 
     if n_total:
-        console.print(f"  [dim]Tracks dans metadata.parquet :[/dim]  [bold]{n_total}[/bold]")
+        console.print(f"  [dim]Tracks in metadata.parquet:[/dim]  [bold]{n_total}[/bold]")
         console.print()
 
     if not methods:
-        console.print("  [yellow]Aucune collection ChromaDB détectée.[/yellow]")
+        console.print("  [yellow]No ChromaDB collection detected.[/yellow]")
     else:
         for method in sorted(methods):
             s = _method_summary(method, df_meta)
@@ -684,28 +685,28 @@ def _render_summary(methods: list[str]) -> None:
 
             tbl.add_row("Segments",    str(s.n_segments))
             tbl.add_row(
-                "Tracks couverts",
+                "Covered tracks",
                 f"{s.n_tracks} / {n_total}  ({_pct(s.n_tracks, n_total)})"
                 if n_total else str(s.n_tracks),
             )
 
             if s.n_incomplete == 0:
-                tbl.add_row("Embeddings",  "[green]complets[/green]")
+                tbl.add_row("Embeddings",  "[green]complete[/green]")
             else:
                 tbl.add_row(
                     "Embeddings",
-                    f"[red]{s.n_incomplete} incomplet(s)[/red]  "
-                    f"[dim](< 80 % segments attendus)[/dim]",
+                    f"[red]{s.n_incomplete} incomplete[/red]  "
+                    f"[dim](< 80% expected segments)[/dim]",
                 )
 
             fp_label  = f"{s.n_fp} / {s.n_fp_total}  ({_pct(s.n_fp, s.n_fp_total)})"
             fp_issues = []
             if s.n_fp_missing > 0:
-                fp_issues.append(f"[red]{s.n_fp_missing} manquant(s)[/red]")
+                fp_issues.append(f"[red]{s.n_fp_missing} missing[/red]")
             if s.n_fp_empty > 0:
-                fp_issues.append(f"[yellow]{s.n_fp_empty} vide(s)[/yellow]")
+                fp_issues.append(f"[yellow]{s.n_fp_empty} empty[/yellow]")
             if s.n_fp_poor > 0:
-                fp_issues.append(f"[yellow]{s.n_fp_poor} pauvre(s)[/yellow]")
+                fp_issues.append(f"[yellow]{s.n_fp_poor} poor[/yellow]")
             fp_str = fp_label
             if fp_issues:
                 fp_str += "  " + "  ".join(fp_issues)
@@ -713,24 +714,24 @@ def _render_summary(methods: list[str]) -> None:
 
             if s.n_segments > 0:
                 tbl.add_row(
-                    "Index FAISS",
-                    "[green]OK[/green]" if s.index_ok else "[red]manquant ou désynchronisé[/red]",
+                    "FAISS index",
+                    "[green]OK[/green]" if s.index_ok else "[red]missing or out of sync[/red]",
                 )
 
             console.print(tbl)
 
             if s.n_crit > 0 or s.n_qual > 0:
                 console.print(
-                    "    [dim]→ [bold]--details[/bold] pour voir les problèmes détaillés[/dim]"
+                    "    [dim]→ [bold]--details[/bold] to see detailed issues[/dim]"
                 )
             console.print()
 
-    # ── BLOC 2 : Métadonnées ─────────────────────────────────────────────────
-    console.rule("[bold cyan]Complétude des métadonnées[/bold cyan]")
+    # ── BLOCK 2: Metadata ────────────────────────────────────────────────────
+    console.rule("[bold cyan]Metadata completeness[/bold cyan]")
     console.print()
 
     if df_meta is None or n_total == 0:
-        console.print("  [yellow]metadata.parquet introuvable ou vide.[/yellow]")
+        console.print("  [yellow]metadata.parquet not found or empty.[/yellow]")
         console.print()
         return
 
@@ -739,9 +740,9 @@ def _render_summary(methods: list[str]) -> None:
             df_meta[col] = None
 
     tbl2 = Table(box=None, show_header=False, padding=(0, 2))
-    tbl2.add_column("champ",  style="dim", no_wrap=True)
-    tbl2.add_column("compte")
-    tbl2.add_column("barre")
+    tbl2.add_column("field",  style="dim", no_wrap=True)
+    tbl2.add_column("count")
+    tbl2.add_column("bar")
 
     BAR_WIDTH = 20
     for col in ITUNES_FIELDS:
@@ -773,16 +774,16 @@ def _render_summary(methods: list[str]) -> None:
     tbl3.add_column("value")
 
     tbl3.add_row(
-        "Complets (tous champs)",
+        "Complete (all fields)",
         f"[green]{n_complete} / {n_total}[/green]  ({_pct(n_complete, n_total)})",
     )
     tbl3.add_row(
-        "Partiels (≥ 1 champ vide)",
+        "Partial (≥ 1 empty field)",
         (f"[yellow]{n_partial} / {n_total}[/yellow]  ({_pct(n_partial, n_total)})"
          if n_partial else f"[green]0[/green]"),
     )
     tbl3.add_row(
-        "Non trouvés (aucun champ)",
+        "Not found (no field)",
         (f"[red]{n_not_found} / {n_total}[/red]  ({_pct(n_not_found, n_total)})"
          if n_not_found else f"[green]0[/green]"),
     )
@@ -792,27 +793,27 @@ def _render_summary(methods: list[str]) -> None:
 
     if n_partial > 0 or n_not_found > 0:
         console.print(
-            "  [dim]→ [bold]--metadata[/bold] pour voir les tracks avec métadonnées manquantes[/dim]"
+            "  [dim]→ [bold]--metadata[/bold] to see tracks with missing metadata[/dim]"
         )
         console.print()
 
 
 # ---------------------------------------------------------------------------
-# Vue --metadata
+# --metadata view
 # ---------------------------------------------------------------------------
 
 def _render_metadata_report() -> None:
-    """Affiche les tracks avec métadonnées manquantes ou partielles."""
+    """Displays tracks with missing or partial metadata."""
     meta_path = PROCESSED_DIR / "metadata.parquet"
 
     if not meta_path.exists():
-        console.print("[red]metadata.parquet introuvable.[/red]")
+        console.print("[red]metadata.parquet not found.[/red]")
         return
 
     try:
         df = pd.read_parquet(meta_path)
     except Exception as e:
-        console.print(f"[red]Impossible de lire metadata.parquet : {e}[/red]")
+        console.print(f"[red]Unable to read metadata.parquet: {e}[/red]")
         return
 
     for col in ITUNES_FIELDS:
@@ -821,22 +822,22 @@ def _render_metadata_report() -> None:
 
     n_total = len(df)
 
-    # ── Tracks non trouvés (tous les champs None) ────────────────────────────
+    # ── Tracks not found (all fields None) ──────────────────────────────────
     console.print()
     df_none = df[df[ITUNES_FIELDS].isnull().all(axis=1)].copy()
     console.rule(
-        f"[bold red]Non trouvés sur Deezer / MusicBrainz[/bold red]  "
+        f"[bold red]Not found on Deezer / MusicBrainz[/bold red]  "
         f"[dim]{len(df_none)} / {n_total}[/dim]"
     )
     console.print()
 
     if df_none.empty:
-        console.print("  [green]Aucun — tous les tracks ont au moins un champ renseigné.[/green]")
+        console.print("  [green]None — all tracks have at least one populated field.[/green]")
     else:
         tbl = Table(show_header=True, header_style="bold red")
         tbl.add_column("#",       style="dim",  width=4)
-        tbl.add_column("Artiste", style="bold")
-        tbl.add_column("Titre")
+        tbl.add_column("Artist",  style="bold")
+        tbl.add_column("Title")
 
         for i, row in enumerate(df_none.itertuples(), start=1):
             tbl.add_row(
@@ -848,23 +849,23 @@ def _render_metadata_report() -> None:
 
     console.print()
 
-    # ── Tracks partiels (≥ 1 champ vide, mais pas tous) ──────────────────────
+    # ── Partial tracks (≥ 1 empty field, but not all) ────────────────────────
     mask_partial = df[ITUNES_FIELDS].isnull().any(axis=1) & ~df[ITUNES_FIELDS].isnull().all(axis=1)
     df_partial   = df[mask_partial].copy()
 
     console.rule(
-        f"[bold yellow]Métadonnées partielles[/bold yellow]  "
+        f"[bold yellow]Partial Metadata[/bold yellow]  "
         f"[dim]{len(df_partial)} / {n_total}[/dim]"
     )
     console.print()
 
     if df_partial.empty:
-        console.print("  [green]Aucun — tous les tracks ont leurs champs complets.[/green]")
+        console.print("  [green]None — all tracks have their fields complete.[/green]")
     else:
         tbl2 = Table(show_header=True, header_style="bold yellow")
         tbl2.add_column("#",            style="dim",    width=4)
-        tbl2.add_column("Artiste",      style="bold")
-        tbl2.add_column("Titre")
+        tbl2.add_column("Artist",      style="bold")
+        tbl2.add_column("Title")
         tbl2.add_column("album",        justify="center")
         tbl2.add_column("genre",        justify="center")
         tbl2.add_column("release_date", justify="center")
@@ -889,8 +890,8 @@ def _render_metadata_report() -> None:
 
     if not df_none.empty or not df_partial.empty:
         console.print(
-            "  [dim]→ Relancer [bold]python manage.py enrich[/bold] "
-            "pour tenter d'enrichir les champs manquants.[/dim]"
+            "  [dim]→ Relaunch [bold]python manage.py enrich[/bold] "
+            "to try to enrich the missing fields.[/dim]"
         )
         console.print()
 
@@ -900,9 +901,9 @@ def _render_metadata_report() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_warning(w: Warning) -> None:
-    """Affiche un warning formaté avec rich.Panel."""
-    LEVEL_COLOR = {"CRITIQUE": "red", "QUALITE": "yellow"}
-    LEVEL_ICON  = {"CRITIQUE": "✗", "QUALITE": "⚠"}
+    """Displays a warning formatted with rich.Panel."""
+    LEVEL_COLOR = {"CRITICAL": "red", "QUALITY": "yellow"}
+    LEVEL_ICON  = {"CRITICAL": "✗", "QUALITY": "⚠"}
 
     color = LEVEL_COLOR.get(w.level, "white")
     icon  = LEVEL_ICON.get(w.level, "•")
@@ -944,11 +945,11 @@ def _render_warning(w: Warning) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Vue --details
+# --details view
 # ---------------------------------------------------------------------------
 
 def _render_details(methods: list[str]) -> list[Warning]:
-    """Affiche les avertissements détaillés par méthode."""
+    """Displays the detailed warnings by method."""
     all_warns: list[Warning] = []
 
     for m in sorted(methods):
@@ -962,18 +963,18 @@ def _render_details(methods: list[str]) -> list[Warning]:
         n_fp = _fp_count(ROOT / config.FINGERPRINTS_DB)
 
         method_warns = check_method(m)
-        n_crit = sum(1 for w in method_warns if w.level == "CRITIQUE")
-        n_qual = sum(1 for w in method_warns if w.level == "QUALITE")
+        n_crit = sum(1 for w in method_warns if w.level == "CRITICAL")
+        n_qual = sum(1 for w in method_warns if w.level == "QUALITY")
 
         if not method_warns:
-            status = "[green]✓ tout OK[/green]"
+            status = "[green]✓ all OK[/green]"
         elif n_crit:
             status = (
-                f"[red]{n_crit} critique(s)[/red]"
-                + (f"  [yellow]{n_qual} qualité[/yellow]" if n_qual else "")
+                f"[red]{n_crit} critical issue(s)[/red]"
+                + (f"  [yellow]{n_qual} quality issue(s)[/yellow]" if n_qual else "")
             )
         else:
-            status = f"[yellow]{n_qual} alerte(s) qualité[/yellow]"
+            status = f"[yellow]{n_qual} quality issue(s)[/yellow]"
 
         console.rule(
             f"[bold cyan]{m.upper()}[/bold cyan]  "
@@ -986,26 +987,26 @@ def _render_details(methods: list[str]) -> list[Warning]:
             for w in method_warns:
                 _render_warning(w)
         else:
-            console.print("  [green]Aucun problème détecté.[/green]\n")
+            console.print("  [green]No issues detected.[/green]\n")
 
         all_warns.extend(method_warns)
 
-    # Résumé final
+    # Final summary
     console.rule()
-    n_crit = sum(1 for w in all_warns if w.level == "CRITIQUE")
-    n_qual = sum(1 for w in all_warns if w.level == "QUALITE")
+    n_crit = sum(1 for w in all_warns if w.level == "CRITICAL")
+    n_qual = sum(1 for w in all_warns if w.level == "QUALITY")
 
     if not all_warns:
-        console.print("[bold green]✓ Toutes les données sont cohérentes.[/bold green]")
+        console.print("[bold green]✓ All data is consistent.[/bold green]")
     elif n_crit:
         console.print(
-            f"[bold red]{n_crit} problème(s) critique(s)[/bold red]"
-            + (f"  [yellow]{n_qual} alerte(s) qualité[/yellow]" if n_qual else "")
+            f"[bold red]{n_crit} critical issue(s)[/bold red]"
+            + (f"  [yellow]{n_qual} quality issue(s)[/yellow]" if n_qual else "")
         )
     else:
         console.print(
-            f"[yellow]{n_qual} alerte(s) qualité[/yellow] — données utilisables, "
-            "mais certains tracks peuvent donner de mauvais résultats."
+            f"[yellow]{n_qual} quality issue(s)[/yellow] — usable data, "
+            "but some tracks may yield poor results."
         )
 
     console.print()
@@ -1018,16 +1019,16 @@ def _render_details(methods: list[str]) -> list[Warning]:
 
 def purge_tracks(method: str, track_ids: set[str]) -> dict:
     """
-    Supprime les données d'un ensemble de tracks pour une méthode donnée.
+    Removes data from a set of tracks for a given method.
 
-    Comportement chirurgical :
-    - Segments supprimés de ChromaDB uniquement pour la méthode purgée
-    - La méthode est retirée de embedded_methods dans metadata.parquet
-    - Si embedded_methods devient vide → la ligne entière est supprimée + fingerprint supprimé
-    - Si d'autres méthodes restent → la ligne est conservée (les autres méthodes sont intactes)
-    - FAISS index + order parquet de la méthode supprimés (à reconstruire)
-
-    Retourne un dict de stats :
+    Surgical behavior:
+    - Segments removed from ChromaDB only for the purged method
+    - The method is removed from embedded_methods in metadata.parquet
+    - If embedded_methods becomes empty → the entire row is removed + fingerprint removed
+    - If other methods remain → the row is kept (other methods are intact)
+    - FAISS index + order parquet of the method removed (to be rebuilt)
+    
+    Returns a statistics dictionary:
         segments_removed, tracks_updated, tracks_removed, fingerprints_removed.
     """
     fp_db      = ROOT / config.FINGERPRINTS_DB
@@ -1056,7 +1057,7 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
         if p.exists():
             p.unlink()
 
-    # --- Metadata : retrait chirurgical de la méthode ---
+    # --- Metadata : surgical removal of the method ---
     fully_removed: set[str] = set()
 
     if meta_path.exists():
@@ -1093,7 +1094,7 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
 
         atomic_write_parquet(meta_path, df_meta)
 
-    # Tracks absents de metadata (orphelins C6) → aussi complètement supprimés
+    # Tracks lacking metadata (C6 orphans) → also completely deleted
     if meta_path.exists():
         remaining_ids = set(pd.read_parquet(meta_path)["track_id"].unique())
     else:
@@ -1108,9 +1109,9 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
 
 
 def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
-    """Affiche le récap, demande confirmation, et purge."""
+    """Display the recap, ask for confirmation, and purge."""
     console.print("")
-    console.rule("[bold red]Récapitulatif de la purge[/bold red]")
+    console.rule("[bold red]Recapitulative of the purge[/bold red]")
     console.print("")
 
     meta_path = PROCESSED_DIR / "metadata.parquet"
@@ -1137,12 +1138,12 @@ def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
             if will_fully_remove:
                 console.print(
                     f"  [red]✗[/red]  [dim cyan]({m})[/dim cyan]  {label}"
-                    f"  [dim red]→ supprimé entièrement[/dim red]"
+                    f"  [dim red]→ completely removed[/dim red]"
                 )
             else:
                 console.print(
                     f"  [yellow]↺[/yellow]  [dim cyan]({m})[/dim cyan]  {label}"
-                    f"  [dim yellow]→ méthode retirée, autres méthodes conservées[/dim yellow]"
+                    f"  [dim yellow]→ method removed, other methods preserved[/dim yellow]"
                 )
 
     total_tracks = sum(len(v) for v in by_method.values())
@@ -1150,46 +1151,46 @@ def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
     console.print(
         f"[bold]{total_tracks} track(s)[/bold] vont être purgés pour la méthode concernée."
     )
-    console.print("[dim]• Segments ChromaDB supprimés pour la méthode purgée uniquement.[/dim]")
-    console.print("[dim]• Si le track n'a plus aucune méthode active → ligne metadata + fingerprint supprimés.[/dim]")
-    console.print("[dim]• L'index FAISS de la méthode sera supprimé — relancer `python manage.py rebuild --what index` après.[/dim]")
+    console.print("[dim]• ChromaDB segments removed for the purged method only.[/dim]")
+    console.print("[dim]• If the track has no more active methods → metadata and fingerprint rows will be deleted.[/dim]")
+    console.print("[dim]• The FAISS index for the method will be deleted — run `python manage.py rebuild --what index` after.[/dim]")
 
     if not yes:
         console.print("")
         confirm = console.input(
-            "[bold yellow]Continuer ?[/bold yellow] [dim](o = confirmer / Entrée = annuler) [/dim]"
+            "[bold yellow]Continue ?[/bold yellow] [dim](y = confirm / Enter = cancel) [/dim]"
         ).strip().lower()
-        if confirm not in ("o", "oui", "y", "yes"):
-            console.print("[dim]Annulé.[/dim]")
+        if confirm not in ("y", "yes"):
+            console.print("[dim]Canceled.[/dim]")
             return
 
     console.print("")
     total_segs = 0
     for m, tids in sorted(by_method.items()):
-        console.print(f"  Purge méthode [cyan]{m}[/cyan]…", end=" ")
+        console.print(f"  Purge method [cyan]{m}[/cyan]…", end=" ")
         stats = purge_tracks(m, tids)
         total_segs += stats["segments_removed"]
-        parts = [f"{stats['segments_removed']} segments supprimés"]
+        parts = [f"{stats['segments_removed']} segments removed"]
         if stats["tracks_updated"] > 0:
-            parts.append(f"{stats['tracks_updated']} track(s) mis à jour (méthode retirée)")
+            parts.append(f"{stats['tracks_updated']} track(s) updated (method removed)")
         if stats["tracks_removed"] > 0:
-            parts.append(f"{stats['tracks_removed']} track(s) supprimé(s) entièrement")
+            parts.append(f"{stats['tracks_removed']} track(s) completely removed")
         if stats["fingerprints_removed"] > 0:
-            parts.append(f"{stats['fingerprints_removed']} fingerprint(s) supprimé(s)")
+            parts.append(f"{stats['fingerprints_removed']} fingerprint(s) removed")
         console.print(f"[green]✓[/green]  " + "  •  ".join(parts))
 
     console.print("")
     console.print(
-        f"[bold green]Purge terminée.[/bold green]  "
-        f"{total_tracks} track(s) traités, {total_segs} segments supprimés."
+        f"[bold green]Purge completed.[/bold green]  "
+        f"{total_tracks} track(s) processed, {total_segs} segments removed."
     )
-    console.print("\n[dim]Pour re-télécharger et reconstruire l'index :[/dim]")
+    console.print("\n[dim]To re-download and rebuild the index :[/dim]")
     console.print("  [bold cyan]python manage.py ingest[/bold cyan]")
     console.print("  [bold cyan]python manage.py rebuild --what index[/bold cyan]")
 
 
 def _run_purge_missing_fp(methods: list[str], yes: bool) -> None:
-    """Purge les tracks qui ont des embeddings mais pas de fingerprint."""
+    """Purge tracks that have embeddings but no fingerprint."""
     fp_db  = ROOT / config.FINGERPRINTS_DB
     fp_ids = _fp_load_stats(fp_db).keys()
 
@@ -1205,28 +1206,28 @@ def _run_purge_missing_fp(methods: list[str], yes: bool) -> None:
             by_method[m] = missing
 
     if not by_method:
-        console.print("[green]Aucun track sans fingerprint — rien à purger.[/green]")
+        console.print("[green]No track without a fingerprint — nothing to purge.[/green]")
         return
 
     total = sum(len(v) for v in by_method.values())
     console.print("")
-    console.rule("[bold yellow]Purge des tracks sans fingerprint[/bold yellow]")
-    console.print(f"\n  [bold]{total} track(s)[/bold] sans fingerprint vont être supprimés.")
-    console.print("  [dim]Ils seront re-téléchargés et re-fingerprinted au prochain run.[/dim]\n")
+    console.rule("[bold yellow]Purge tracks without fingerprinting[/bold yellow]")
+    console.print(f"\n  [bold]{total} track(s)[/bold] without fingerprints will be deleted.")
+    console.print("  [dim]They will be re-downloaded and re-fingerprinted at the next run.[/dim]\n")
 
     if not yes:
         confirm = console.input(
-            "[bold yellow]Continuer ?[/bold yellow] [dim](o = confirmer / Entrée = annuler) [/dim]"
+            "[bold yellow]Continue ?[/bold yellow] [dim](y = confirm / Enter = cancel) [/dim]"
         ).strip().lower()
-        if confirm not in ("o", "oui", "y", "yes"):
-            console.print("[dim]Annulé.[/dim]")
+        if confirm not in ("y", "yes"):
+            console.print("[dim]Canceled.[/dim]")
             return
 
     _run_purge(by_method, yes=True)
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_check(
@@ -1238,17 +1239,17 @@ def run_check(
     yes:              bool = False,
 ) -> None:
     """
-    Vérifie la cohérence des données du projet Shazam Maison.
+    Checks the consistency of the Shazam Home project data.
 
     Args:
-        method:           méthode à vérifier (défaut : toutes détectées).
-        details:          affiche le détail de chaque problème.
-        metadata:         affiche les tracks avec métadonnées manquantes.
-        purge:            supprime les tracks problématiques.
-        purge_missing_fp: purge uniquement les tracks sans fingerprint.
-        yes:              ne pas demander de confirmation avant de purger.
+        method:           method to check (default: all detected).
+        details:          displays the details of each problem.
+        metadata:         displays tracks with missing metadata.
+        purge:            removes problematic tracks.
+        purge_missing_fp: purges only tracks without fingerprints.
+        yes:              does not ask for confirmation before purging.
     """
-    # Détecter les méthodes disponibles depuis ChromaDB
+    # Detect the methods available from ChromaDB
     if method:
         methods = [method]
     else:
@@ -1258,12 +1259,12 @@ def run_check(
         except Exception:
             methods = []
 
-    # ── Mode --metadata ────────────────────────────────────────────────────
+    # ── --metadata mode ────────────────────────────────────────────────────
     if metadata:
         _render_metadata_report()
         return
 
-    # ── Mode --details (+ éventuellement --purge) ──────────────────────────
+    # ── --details mode (+ eventually --purge) ──────────────────────────
     if details or purge or purge_missing_fp:
         if not methods:
             console.print(
@@ -1285,18 +1286,18 @@ def run_check(
 
             if not by_method:
                 console.print(
-                    "\n[yellow]Aucun track individuel à purger "
-                    "(les alertes sont globales — voir les actions suggérées).[/yellow]"
+                    "\n[yellow]No individual tracks to purge "
+                    "(Alerts are global — see suggested actions).[/yellow]"
                 )
                 return
 
             _run_purge(by_method, yes)
         elif not details:
             console.print(
-                "\n[dim]Astuce : relance avec [bold]--purge[/bold] pour supprimer "
-                "automatiquement les tracks problématiques.[/dim]"
+                "\n[dim]Tip: run with [bold]--purge[/bold] to automatically delete "
+                "problematic tracks.[/dim]"
             )
         return
 
-    # ── Vue résumé (défaut) ────────────────────────────────────────────────
+    # ── Summary view (default) ────────────────────────────────────────────────
     _render_summary(methods)

@@ -1,13 +1,13 @@
 """
 src/maintenance/enrich.py
 
-Enrichissement des métadonnées depuis Deezer + MusicBrainz (fallback).
+Metadata enrichment from Deezer + MusicBrainz (fallback).
 
-Sources en cascade :
-    1. Deezer API   — gratuit, sans clé, excellent pour la musique internationale
-    2. MusicBrainz  — fallback pour les tracks introuvables sur Deezer (1 req/sec)
+Cascading sources:
+    1. Deezer API   — free, no key required, excellent for international music
+    2. MusicBrainz  — fallback for tracks not found on Deezer (1 req/sec)
 
-Point d'entrée public : run_enrich(force, only_missing)
+Public entry point: run_enrich(force, only_missing)
 """
 
 from __future__ import annotations
@@ -180,19 +180,19 @@ def _fetch_metadata(artist: str, title: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_enrich(force: bool = False, only_missing: bool = False) -> None:
     """
-    Enrichit metadata.parquet avec les données Deezer (+ MusicBrainz en fallback).
+    Enriches metadata.parquet with Deezer data (+ MusicBrainz fallback).
 
     Args:
-        force:        si True, met à jour tous les tracks, même ceux déjà enrichis.
-        only_missing: ne traite que les tracks avec au moins un champ vide (défaut sans --force).
+        force:        if True, updates all tracks, even those already enriched.
+        only_missing: only processes tracks with at least one empty field (default without --force).
     """
     if not METADATA_PATH.exists():
-        console.print("[red]metadata.parquet introuvable. Lance d'abord l'ingestion.[/red]")
+        console.print("[red]metadata.parquet not found. Run ingestion first.[/red]")
         sys.exit(1)
 
     df = pd.read_parquet(METADATA_PATH)
@@ -203,16 +203,16 @@ def run_enrich(force: bool = False, only_missing: bool = False) -> None:
 
     if force:
         to_enrich = df
-        console.print(f"[yellow]Mode --force : {len(to_enrich)} tracks à mettre à jour.[/yellow]")
+        console.print(f"[yellow]--force mode: {len(to_enrich)} tracks to update.[/yellow]")
     else:
         mask      = df[ITUNES_FIELDS].isnull().any(axis=1)
         to_enrich = df[mask]
         console.print(
-            f"[cyan]{len(to_enrich)} track(s) avec au moins un champ vide sur {len(df)} total.[/cyan]"
+            f"[cyan]{len(to_enrich)} track(s) with at least one empty field out of {len(df)} total.[/cyan]"
         )
 
     if to_enrich.empty:
-        console.print("[green]Tous les tracks sont déjà enrichis.[/green]")
+        console.print("[green]All tracks are already enriched.[/green]")
         return
 
     updated   = 0
@@ -227,7 +227,7 @@ def run_enrich(force: bool = False, only_missing: bool = False) -> None:
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("[cyan]Enrichissement...", total=len(to_enrich))
+        task = progress.add_task("[cyan]Enriching...", total=len(to_enrich))
 
         for row in to_enrich.itertuples():
             artist = str(row.artist)
@@ -249,6 +249,6 @@ def run_enrich(force: bool = False, only_missing: bool = False) -> None:
     atomic_write_parquet(METADATA_PATH, df)
 
     console.print(
-        f"\n[green]✓ {updated} track(s) enrichi(s)[/green]  •  "
-        f"[yellow]{not_found} introuvable(s) sur Deezer/MusicBrainz[/yellow]"
+        f"\n[green]✓ {updated} track(s) enriched[/green]  •  "
+        f"[yellow]{not_found} not found on Deezer/MusicBrainz[/yellow]"
     )

@@ -1,17 +1,17 @@
 """
 src/evaluation/report_analyses.py
 
-Analyses orientées rapport :
+Report-oriented analyses:
   - studio-mic
   - duration
   - stage12
   - rir
   - mic-conditions
 
-Chaque analyse produit :
-  - un JSON
-  - un Markdown de synthèse
-  - des graphiques lisibles pour le rapport
+Each analysis produces:
+  - a JSON
+  - a Markdown summary
+  - readable graphs for the report
 """
 
 from __future__ import annotations
@@ -611,17 +611,17 @@ def _limit_manifest(manifest: list[dict], n_tracks: int) -> list[dict]:
 
 def _manifest_eval_order(manifest: list[dict]) -> list[dict]:
     """
-    Réordonne le manifest pour traiter les requêtes par morceau.
+    Reorders the manifest to process queries by track.
 
-    Objectif :
-    - garder toutes les variantes d'un même track côte à côte ;
-    - améliorer la localité du cache fingerprints ;
-    - éviter de parcourir d'abord tous les reference_clips puis tous les micros.
+    Objective:
+    - keep all variants of the same track side by side;
+    - improve fingerprint cache locality;
+    - avoid going through all reference_clips first then all micros.
 
-    Ordre intra-track :
-    1. studio puis micro
-    2. durée croissante
-    3. nom de fichier pour stabilité
+    Intra-track order:
+    1. studio then micro
+    2. increasing duration
+    3. filename for stability
     """
     grouped: dict[str, list[dict]] = defaultdict(list)
     first_seen_order: list[str] = []
@@ -724,7 +724,7 @@ def _append_resume_row(cache_path: Path, row: dict) -> None:
 
 
 def _release_eval_memory() -> None:
-    """Libère au mieux la mémoire temporaire entre deux requêtes sans vider les gros caches utiles."""
+    """Releases temporary memory as much as possible between two queries without emptying useful large caches."""
     gc.collect()
     try:
         import torch
@@ -792,8 +792,8 @@ def _evaluate_manifest_entries(
     }
     resumed_rows = [resume_cache[k] for k in expected_keys if k in resume_cache]
     if resumed_rows:
-        console.print(f"[eval] Reprise trouvée : {len(resumed_rows)}/{len(expected_keys)} requête(s) déjà calculée(s)")
-    console.print(f"[dim][eval] Cache de reprise : {cache_path}[/dim]")
+        console.print(f"[eval] Resume found: {len(resumed_rows)}/{len(expected_keys)} query(ies) already computed")
+    console.print(f"[dim][eval] Resume cache: {cache_path}[/dim]")
 
     total_queries = len(manifest) * len(methods)
     with Progress(
@@ -809,7 +809,7 @@ def _evaluate_manifest_entries(
         task_id = progress.add_task(
             "Base eval",
             total=total_queries,
-            current="initialisation...",
+            current="initializing...",
         )
 
         for method in methods:
@@ -865,7 +865,7 @@ def _resolve_base_rows(
     rows: list[dict] | None = None,
     coverage: dict | None = None,
 ) -> tuple[list[dict], dict]:
-    """Retourne une table de base déjà calculée ou lance la passe unique d'évaluation."""
+    """Returns an already computed base table or launches the single evaluation pass."""
     if rows is not None and coverage is not None:
         return rows, coverage
     return _evaluate_manifest_entries(methods=methods, n_tracks=n_tracks)
@@ -1276,8 +1276,8 @@ def run_rir_analysis(methods: list[str] | None = None, n_tracks: int = 0,
     if methods is None:
         methods = [config.EMBEDDING_METHOD]
     _cleanup_rir_plots()
-    # Aligner l'analyse RIR sur la même base de test que `eval`/`eval base`:
-    # les requêtes réelles du manifest, prises telles quelles.
+    # Align the RIR analysis to the same test basis as `eval`/`eval base`:
+    # the actual requests of the manifest, taken as is.
     result = run_rir_evaluate(methods=methods, conditions=["clean"],
                               n_tracks=n_tracks, out_dir=out_dir, plot=False)
 
@@ -1535,5 +1535,5 @@ def run_base_eval_suite(methods: list[str] | None = None, n_tracks: int = 0,
 
 def run_full_eval(methods: list[str] | None = None, n_tracks: int = 0,
                   out_dir: Path | None = None, plot: bool = True) -> dict:
-    """Compatibilité descendante : alias vers la suite d'évaluation de base."""
+    """Backward compatibility: alias to the base evaluation suite."""
     return run_base_eval_suite(methods=methods, n_tracks=n_tracks, out_dir=out_dir, plot=plot)

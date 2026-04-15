@@ -79,8 +79,8 @@ def _load_clap(model_name: str, device: str | None = None, local_files_only: boo
         else:
             device = "cpu"
 
-    # Sur Apple Silicon (MPS), certaines opérations CLAP ne sont pas supportées nativement.
-    # On active le fallback CPU automatiquement pour que ça fonctionne sur toutes les machines.
+    # On Apple Silicon (MPS), some CLAP operations are not natively supported.
+    # We automatically enable CPU fallback so it works on all machines.
     if device == "mps":
         import os
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -152,8 +152,8 @@ def clap_batch_embeddings(
     eps: float = 1e-10,
 ) -> np.ndarray:
     """
-    Calcule les embeddings CLAP pour un batch de segments en un seul appel GPU.
-    Analogue à muq_batch_embeddings — évite les allers-retours GPU répétés.
+    Compute CLAP embeddings for a batch of segments in a single GPU call.
+    Similar to muq_batch_embeddings — avoids repeated GPU round trips.
 
     Returns:
         emb: (B, 512) float32
@@ -210,7 +210,7 @@ def _load_muq(model_name: str, device: str | None = None, local_files_only: bool
         if torch.cuda.is_available():
             device = "cuda"
         else:
-            device = "cpu"  # MPS ne supporte pas ComplexFloat (requis par MuQ)
+            device = "cpu"  # MPS does not support ComplexFloat (required by MuQ)
 
     import src.config as config
     # Float16 uniquement sur CUDA — sur CPU LayerNorm ne supporte pas Half
@@ -322,7 +322,7 @@ def muq_batch_embeddings(
     # Load model (cached) and run forward
     model, device = _load_muq(model_name=model_name)
 
-    # Caster l'entrée au même type que le modèle (float16 ou float32)
+    # Cast input to the same type as the model (float16 or float32)
     model_dtype = next(model.parameters()).dtype
     x_t = torch.from_numpy(x).to(device).to(model_dtype)
     attn_t = torch.from_numpy(attn).to(device)
@@ -355,13 +355,13 @@ _MERT_CACHE = {"model": None, "processor": None, "device": None, "model_name": N
 
 def _load_mert(model_name: str, device: str | None = None, local_files_only: bool = False):
     """
-    Charge et met en cache un modèle MERT (Music undERstanding Transformer).
-    MERT est entraîné exclusivement sur de la musique → meilleure robustesse
-    aux variations timbrales (bruit micro, réverbération) que CLAP.
+    Load and cache a MERT model (Music undERstanding Transformer).
+    MERT is trained exclusively on music → better robustness
+    to timbral variations (microphone noise, reverberation) than CLAP.
 
     Args:
-        model_name: ex. "m-a-p/MERT-v1-95M" ou "m-a-p/MERT-v1-330M"
-        device: "cuda", "mps" ou "cpu". Détection automatique si None.
+        model_name: e.g. "m-a-p/MERT-v1-95M" or "m-a-p/MERT-v1-330M"
+        device: "cuda", "mps" or "cpu". Automatic detection if None.
 
     Returns:
         (model, processor, device)
@@ -405,10 +405,10 @@ def _load_mert(model_name: str, device: str | None = None, local_files_only: boo
 
 def mert_embedding(waveform: np.ndarray, sr: int, model_name: str, target_sr: int = 24000, normalize: bool = True, eps: float = 1e-10) -> np.ndarray:
     """
-    Calcule un embedding audio avec MERT (mean pooling sur last_hidden_state).
+    Compute an audio embedding with MERT (mean pooling on last_hidden_state).
 
     Returns:
-        np.ndarray: vecteur 1D de dimension 768 (MERT-v1-95M) ou 1024 (MERT-v1-330M).
+        np.ndarray: 1D vector of dimension 768 (MERT-v1-95M) or 1024 (MERT-v1-330M).
     """
     import torch
 
@@ -446,7 +446,7 @@ def mert_batch_embeddings(
     eps: float = 1e-10,
 ) -> np.ndarray:
     """
-    Calcule les embeddings MERT pour un batch de segments en un seul appel GPU.
+    Compute MERT embeddings for a batch of segments in a single GPU call.
 
     Returns:
         emb: (B, H) float32

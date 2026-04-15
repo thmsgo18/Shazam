@@ -18,7 +18,7 @@ RAW_DIR = Path("data/raw")
 
 
 def generate_track_id(path: Path) -> str:
-    """Identifiant stable basé sur le contenu du fichier (premiers 8 Ko)."""
+    """Stable identifier based on the file content (first 8 KB)."""
     with open(path, "rb") as f:
         return hashlib.md5(f.read(8192)).hexdigest()
 

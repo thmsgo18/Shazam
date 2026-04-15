@@ -1,10 +1,10 @@
 """
 src/evaluation/find_track.py
 
-Pipeline complet sur un fichier audio, avec affichage de la position
-d'un track cible à chaque étape : Stage 1 (FAISS) et Stage 2 (Fingerprint).
+Complete pipeline on an audio file, displaying the position
+of a target track at each step: Stage 1 (FAISS) and Stage 2 (Fingerprint).
 
-Point d'entrée public : run_find_track(audio, target_track_id, top, method)
+Public entry point: run_find_track(audio, target_track_id, top, method)
 """
 
 from __future__ import annotations
@@ -83,26 +83,26 @@ def _get_target_sr(method: str) -> int:
 
 
 def _load_model(method: str) -> None:
-    """Charge le modèle PyTorch AVANT tout import de faiss (Apple Silicon)."""
+    """Load the PyTorch model BEFORE any import of files (Apple Silicon)."""
     if method == "clap":
         from src.features.embeddings_audio import _load_clap
-        console.print(f"[cyan]Chargement du modèle {config.CLAP_MODEL_NAME}...[/cyan]")
+        console.print(f"[cyan]Loading the {config.CLAP_MODEL_NAME} model...[/cyan]")
         _load_clap(config.CLAP_MODEL_NAME)
-        console.print("[green]✓ Modèle prêt.[/green]\n")
+        console.print("[green]✓ Model ready.[/green]\n")
     elif method == "muq":
         from src.features.embeddings_audio import _load_muq
-        console.print(f"[cyan]Chargement du modèle {config.MUQ_MODEL_NAME}...[/cyan]")
+        console.print(f"[cyan]Loading the {config.MUQ_MODEL_NAME} model...[/cyan]")
         _load_muq(config.MUQ_MODEL_NAME)
-        console.print("[green]✓ Modèle prêt.[/green]\n")
+        console.print("[green]✓ Model ready.[/green]\n")
     elif method == "mert":
         from src.features.embeddings_audio import _load_mert
-        console.print(f"[cyan]Chargement du modèle {config.MERT_MODEL_NAME}...[/cyan]")
+        console.print(f"[cyan]Loading the {config.MERT_MODEL_NAME} model...[/cyan]")
         _load_mert(config.MERT_MODEL_NAME)
-        console.print("[green]✓ Modèle prêt.[/green]\n")
+        console.print("[green]✓ Model ready.[/green]\n")
 
 
 # ---------------------------------------------------------------------------
-# Point d'entrée public
+# Public entry point
 # ---------------------------------------------------------------------------
 
 def run_find_track(
@@ -112,16 +112,16 @@ def run_find_track(
     method:          str | None = None,
 ) -> None:
     """
-    Analyse un fichier audio et affiche la position du track cible à chaque étape.
+    Analyzes an audio file and displays the position of the target track at each step.
 
     Args:
-        audio:           chemin vers le fichier audio à analyser.
-        target_track_id: track_id à suivre dans les classements (défaut : Flowers).
-        top:             nombre de résultats à afficher dans les tableaux.
-        method:          méthode d'embedding (défaut : config.EMBEDDING_METHOD).
+        audio:           path to the audio file to analyze.
+        target_track_id: track_id to follow in the rankings (default: Flowers).
+        top:             number of results to display in the tables.
+        method:          embedding method (default: config.EMBEDDING_METHOD).
     """
     if not Path(audio).exists():
-        console.print(f"[red]Fichier introuvable : {audio}[/red]")
+        console.print(f"[red]File not found: {audio}[/red]")
         sys.exit(1)
 
     if method is None:
@@ -136,24 +136,24 @@ def run_find_track(
         title  = info.get("title",  "—")[:28]
         return f"{artist} — {title}"
 
-    console.print(f"\n[bold cyan]Fichier :[/bold cyan] {audio}")
-    console.print(f"[bold cyan]Méthode :[/bold cyan] {method}")
-    console.print(f"[bold cyan]Cible   :[/bold cyan] {label(target_track_id)}\n")
+    console.print(f"\n[bold cyan]File:[/bold cyan] {audio}")
+    console.print(f"[bold cyan]Method:[/bold cyan] {method}")
+    console.print(f"[bold cyan]Target:[/bold cyan] {label(target_track_id)}\n")
 
-    # Chargement modèle AVANT faiss (Apple Silicon)
+    # Front-loading model (Apple Silicon)
     _load_model(method)
 
-    # Import lazy de searcher — APRÈS le modèle pour éviter le conflit Accelerate
+    # Lazy import of searcher — AFTER the model to avoid Accelerate conflict
     from src.retrieval.searcher import load_searcher, search_segments, aggregate_by_track
 
-    # ── Stage 1 : FAISS ──────────────────────────────────────────────────────
-    console.print("[yellow]Stage 1 — Chargement index + embeddings...[/yellow]")
+    # ── Stage 1: FAISS ──────────────────────────────────────────────────────
+    console.print("[yellow]Stage 1 — Loading index + embeddings...[/yellow]")
     index, segments = load_searcher(method)
 
     waveform, sr = load_audio(audio, target_sr=targ_sr)
     waveform = preprocess_query(waveform, sr)
     seg_list = [seg for _, seg in iter_segments(waveform=waveform, sr=sr)]
-    console.print(f"  {len(seg_list)} segments | index : {index.ntotal} vecteurs\n")
+    console.print(f"  {len(seg_list)} segments | index : {index.ntotal} vectors\n")
 
     global_scores: dict[str, float] = {}
     for seg in seg_list:
@@ -173,32 +173,32 @@ def run_find_track(
     score_s1 = global_scores.get(target_track_id, 0.0)
 
     console.rule("[bold]Stage 1 — FAISS (embedding)")
-    console.print(f"  Position cible : {_rank_label(rank_s1)}  |  score FAISS = [cyan]{score_s1:.4f}[/cyan]")
+    console.print(f"  Target position: {_rank_label(rank_s1)}  |  FAISS score  = [cyan]{score_s1:.4f}[/cyan]")
     if rank_s1 and rank_s1 > 1:
         top1_tid, top1_score = ranked_s1[0]
         console.print(f"  Top-1          : {label(top1_tid)}  score = [cyan]{top1_score:.4f}[/cyan]")
-        console.print(f"  Écart cible/Top-1 : [red]{top1_score / score_s1:.1f}×[/red] plus haut\n")
+        console.print(f"  Gap target/Top-1: [red]{top1_score / score_s1:.1f}×[/red] higher\n")
     else:
         console.print()
 
     t1 = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
     t1.add_column("#",            width=4,  style="dim")
-    t1.add_column("Artiste — Titre",        width=52)
-    t1.add_column("Score FAISS",  justify="right", width=12)
+    t1.add_column("Artist — Title",        width=52)
+    t1.add_column("FAISS Score",  justify="right", width=12)
 
     target_shown = rank_s1 is None or rank_s1 <= top
     for rank, (tid, score) in enumerate(ranked_s1, 1):
         is_target = tid == target_track_id
         if rank <= top or is_target:
             style  = "bold green" if is_target else ("dim" if rank > top else "")
-            marker = " ← 🎯 CIBLE" if is_target else ""
+            marker = " ← 🎯 TARGET" if is_target else ""
             t1.add_row(str(rank), label(tid) + marker, f"{score:.4f}", style=style)
         if rank > top and target_shown:
             break
 
     console.print(t1)
 
-    # ── Stage 2 : Fingerprinting ──────────────────────────────────────────────
+    # ── Stage 2: Fingerprinting ──────────────────────────────────────────────
     from src.features.fingerprint import extract_fingerprint, fingerprint_similarity
 
     console.rule("[bold]Stage 2 — Fingerprint (re-ranking)")
@@ -208,18 +208,18 @@ def run_find_track(
 
     if not target_in_candidates:
         console.print(
-            f"  [red]⚠ La cible n'est pas dans les {config.VECTOR_TOP_N_TRACKS} candidats du Stage 2.[/red]"
+            f"  [red]⚠ The target is not in the {config.VECTOR_TOP_N_TRACKS} candidates of Stage 2.[/red]"
         )
-        console.print(f"  [dim](rang FAISS = #{rank_s1} > cutoff = {config.VECTOR_TOP_N_TRACKS})[/dim]\n")
+        console.print(f"  [dim](FAISS rank = #{rank_s1} > cutoff = {config.VECTOR_TOP_N_TRACKS})[/dim]\n")
     else:
-        console.print(f"  [green]✓ La cible est dans les {config.VECTOR_TOP_N_TRACKS} candidats du Stage 2.[/green]\n")
+        console.print(f"  [green]✓ The target is in the {config.VECTOR_TOP_N_TRACKS} candidates of Stage 2.[/green]\n")
 
     if targ_sr != config.SAMPLE_RATE:
         wf_fp = librosa.resample(waveform, orig_sr=targ_sr, target_sr=config.SAMPLE_RATE)
     else:
         wf_fp = waveform
     query_fp = extract_fingerprint(wf_fp, config.SAMPLE_RATE)
-    console.print(f"  {len(query_fp)} hashes extraits de la requête\n")
+    console.print(f"  {len(query_fp)} hashes extracted from the query\n")
 
     final: list[tuple[str, float, float, float]] = []
     for tid, score_faiss in candidates:
@@ -236,26 +236,26 @@ def run_find_track(
     rank_s2    = next((i + 1 for i, (tid, *_) in enumerate(final) if tid == target_track_id), None)
     target_s2  = next(((sf, sf_faiss, fp) for tid, sf, sf_faiss, fp in final if tid == target_track_id), None)
 
-    console.print(f"  Position cible : {_rank_label(rank_s2)}", end="")
+    console.print(f"  Target position: {_rank_label(rank_s2)}", end="")
     if target_s2:
         console.print(
-            f"  |  score final = [cyan]{target_s2[0]:.4f}[/cyan]  "
+            f"  |  final score = [cyan]{target_s2[0]:.4f}[/cyan]  "
             f"(faiss={target_s2[1]:.4f}  fp={target_s2[2]:.4f})"
         )
     elif not target_in_candidates:
-        console.print("  [dim](absent des candidats)[/dim]")
+        console.print("  [dim](not in candidates)[/dim]")
     else:
         console.print()
 
     if rank_s2 and rank_s2 > 1 and final:
         top1_tid, top1_sf, *_ = final[0]
-        console.print(f"  Top-1 final : {label(top1_tid)}  score = [cyan]{top1_sf:.4f}[/cyan]\n")
+        console.print(f"  Final Top-1: {label(top1_tid)}  score = [cyan]{top1_sf:.4f}[/cyan]\n")
     else:
         console.print()
 
     t2 = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
     t2.add_column("#",           width=4,  style="dim")
-    t2.add_column("Artiste — Titre",       width=48)
+    t2.add_column("Artist — Title",       width=48)
     t2.add_column("Score final", justify="right", width=12)
     t2.add_column("Score FAISS", justify="right", width=12)
     t2.add_column("Score FP",    justify="right", width=10)
@@ -272,8 +272,8 @@ def run_find_track(
 
     console.print(t2)
 
-    # ── Résumé ────────────────────────────────────────────────────────────────
-    console.rule("[bold]Résumé")
+    # ── Summary ────────────────────────────────────────────────────────────────
+    console.rule("[bold]Summary")
     console.print(f"  Stage 1 (FAISS)      : {_rank_label(rank_s1)}  score={score_s1:.4f}")
     if target_in_candidates and target_s2:
         console.print(
@@ -283,6 +283,6 @@ def run_find_track(
     else:
         console.print(
             f"  Stage 2 (Fingerprint): [red]NF[/red]  "
-            f"(coupé au Stage 1, cutoff={config.VECTOR_TOP_N_TRACKS})"
+            f"(cut off at Stage 1, cutoff={config.VECTOR_TOP_N_TRACKS})"
         )
     console.print()
