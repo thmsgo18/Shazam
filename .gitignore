@@ -39,9 +39,8 @@ data/kaggle/
 
 # ─── Résultats générés automatiquement ───────────────────────────────────────
 # Garder EXPERIMENTS.md (notes manuelles) mais ignorer les artefacts machines
-results/benchmark/
-results/eval/
-results/plots/
+results/*
+!results/EXPERIMENTS.md
 
 # ─── Audio et modèles ────────────────────────────────────────────────────────
 *.mp3
