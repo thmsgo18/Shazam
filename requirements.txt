@@ -20,8 +20,9 @@ imageio-ffmpeg>=0.5,<1
 # Retrieval / embeddings
 faiss-cpu>=1.8,<2
 chromadb>=0.5,<2
-torch>=2.2,<2.4
-torchaudio>=2.2,<2.4
+# `transformers` now requires torch>=2.6 for safe model loading after CVE-2025-32434.
+torch>=2.6,<2.8
+torchaudio>=2.6,<2.8
 transformers>=4.41,<5
 einops>=0.8,<1
 easydict>=1.13,<2
