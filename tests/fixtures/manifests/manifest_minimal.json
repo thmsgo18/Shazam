@@ -1,0 +1,10 @@
+[
+  {
+    "filename": "reference_clips/sample.mp3",
+    "track_id": "track_1",
+    "artist": "Artist One",
+    "title": "Song One",
+    "position": "middle",
+    "duration_s": 15
+  }
+]
