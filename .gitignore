@@ -28,8 +28,11 @@ data/features/
 data/index/
 data/processed/
 
-# Audio de test (data/raw/) — conservé hors git
-data/raw/
+# Audio de test local (conservé hors git, sauf documentation et exemple)
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/README.md
+!data/raw/manifest.example.json
 
 # Fichiers CSV Kaggle téléchargés
 data/kaggle/

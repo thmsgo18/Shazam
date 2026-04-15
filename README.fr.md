@@ -244,6 +244,41 @@ cd webapp/frontend && npm install && cd ../..
 
 ---
 
+## Téléchargement YouTube
+
+Les téléchargements audio sont gérés par [`src/utils/youtube.py`](src/utils/youtube.py), utilisé par l'ingestion, la reconstruction des fingerprints et l'augmentation RIR.
+
+Comportement par défaut :
+- Le projet préfère `python -m yt_dlp` depuis l'environnement virtuel actif. Si ce module n'est pas disponible, il retombe sur un exécutable `yt-dlp` présent dans le `PATH`.
+- Le téléchargeur ignore les fichiers de configuration `yt-dlp` globaux/utilisateur pour conserver un comportement reproductible d'une machine à l'autre.
+- Les cookies navigateur ne sont pas requis par défaut.
+- `ffmpeg` est nécessaire pour extraire et convertir l'audio après téléchargement.
+
+Configuration recommandée :
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+ffmpeg -version
+python -m yt_dlp --version
+```
+
+Variables d'environnement optionnelles :
+- `FFMPEG_BINARY=/chemin/absolu/vers/ffmpeg` : à utiliser si `ffmpeg` est installé mais pas exposé dans le `PATH`.
+- `YT_DLP_BROWSER=firefox` : permet à `yt-dlp` de lire les cookies d'un navigateur local lorsqu'une vidéo demande une authentification.
+- `YT_DLP_COOKIEFILE=/chemin/vers/cookies.txt` : utilise un fichier de cookies exporté au format Netscape au lieu de l'intégration navigateur.
+
+Dépannage rapide :
+- `ffmpeg is not installed or not found` : installer `ffmpeg` ou définir `FFMPEG_BINARY`.
+- `yt-dlp is not installed or not found in PATH` : activer le venv du projet puis réinstaller `requirements.txt`.
+- `video requires authentication/cookies` : réessayer avec `YT_DLP_BROWSER` ou `YT_DLP_COOKIEFILE`.
+- `video unavailable` ou `video unavailable in this region` : c'est une limitation côté YouTube, pas un bug du projet.
+
+Notes :
+- L'audio téléchargé est stocké dans un dossier temporaire pendant le traitement, puis supprimé par le pipeline.
+- Le code cherche à être portable, mais aucune implémentation ne peut garantir tous les téléchargements YouTube sur toutes les machines : disponibilité des vidéos, limitations de débit, cookies et restrictions régionales restent contrôlés par YouTube.
+
+---
+
 ## Données
 
 Les données musicales proviennent des classements Spotify via Kaggle. Le pipeline télécharge automatiquement l'audio depuis YouTube en RAM (aucun MP3 stocké sur disque) à partir des titres et artistes présents dans le CSV.
@@ -260,6 +295,8 @@ Les CSV Kaggle `spotify-streaming-top-50-*.csv` sont directement compatibles. Pl
 **Dataset utilisé :** [Spotify Streaming Top 50 — Kaggle](https://www.kaggle.com/datasets/anxods/spotify-top-50-playlist-songs-anxods) — classements quotidiens Top 50 mondial et par pays.
 
 **Déduplication automatique :** un même morceau présent dans plusieurs CSV (hits mondiaux présents dans le top France, top US et top Monde) n'est traité qu'une fois, identifié par son `track_id` (hash MD5 de `artiste_titre`).
+
+**Politique pour les requêtes de test locales :** les fichiers de `data/raw/` (extraits de référence, captures micro, `manifest.json`) ne sont pas versionnés sur GitHub. Le dépôt conserve uniquement la structure du dossier, un exemple de manifeste et la documentation associée dans [`data/raw/README.md`](./data/raw/README.md). Les vrais audios peuvent être gardés sur chaque machine membre du groupe ou partagés via un stockage privé.
 
 ---
 
@@ -535,6 +572,8 @@ Table centrale des tracks. Colonnes principales :
 **SQLite et accès concurrents** — si le projet réside dans un dossier synchronisé par iCloud, les uploads en arrière-plan peuvent verrouiller `fingerprints.db` et provoquer des erreurs `database is locked`. Le dossier `data/` est exclu d'iCloud via attribut `xattr`. Le mode WAL et un mécanisme de retry sont activés pour gérer les contentions résiduelles.
 
 **Après un `check --purge`** — l'index FAISS est supprimé pendant la purge. Relancer `python manage.py rebuild --what index` est obligatoire avant toute identification.
+
+**Enregistrements micro hors Git** — les enregistrements faits par l'équipe pour tester le système sont volontairement exclus du dépôt. Pour un rendu propre, versionner le protocole, la structure de `data/raw/` et un `manifest.example.json`, puis conserver les vrais fichiers audio dans un stockage privé.
 
 ---
 

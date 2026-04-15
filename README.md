@@ -231,6 +231,41 @@ cd webapp/frontend && npm install && cd ../..
 
 ---
 
+## YouTube Download
+
+Audio downloads are handled by [`src/utils/youtube.py`](src/utils/youtube.py), which is used by ingestion, fingerprint rebuilding, and RIR augmentation.
+
+Default behavior:
+- The project prefers `python -m yt_dlp` from the active virtual environment. If that module is not available, it falls back to a `yt-dlp` executable in `PATH`.
+- The downloader ignores user/global `yt-dlp` config files so the behavior stays reproducible across machines.
+- Browser cookies are not required by default.
+- `ffmpeg` is required to extract/convert audio after download.
+
+Recommended setup:
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+ffmpeg -version
+python -m yt_dlp --version
+```
+
+Optional environment variables:
+- `FFMPEG_BINARY=/absolute/path/to/ffmpeg`: use this if `ffmpeg` is installed but not exposed in `PATH`.
+- `YT_DLP_BROWSER=firefox`: allow `yt-dlp` to read cookies from a local browser when a video requires authentication.
+- `YT_DLP_COOKIEFILE=/path/to/cookies.txt`: use an exported Netscape cookie file instead of browser integration.
+
+Troubleshooting:
+- `ffmpeg is not installed or not found`: install `ffmpeg` or set `FFMPEG_BINARY`.
+- `yt-dlp is not installed or not found in PATH`: activate the project venv and reinstall `requirements.txt`.
+- `video requires authentication/cookies`: retry with `YT_DLP_BROWSER` or `YT_DLP_COOKIEFILE`.
+- `video unavailable` or `video unavailable in this region`: this is a YouTube-side limitation, not a project bug.
+
+Notes:
+- Downloaded audio is stored in a temporary directory during processing, then removed by the pipeline.
+- The code aims to be portable, but no implementation can guarantee every YouTube video on every machine because availability, rate limits, cookies, and regional restrictions are controlled by YouTube.
+
+---
+
 ## Data
 
 Music data comes from Spotify charts via Kaggle. The pipeline automatically downloads audio from YouTube into RAM (no MP3 stored on disk) using the artist and track names from the CSV.
@@ -247,6 +282,8 @@ Kaggle `spotify-streaming-top-50-*.csv` files are directly compatible. Place the
 **Dataset used:** [Spotify Streaming Top 50 — Kaggle](https://www.kaggle.com/datasets/anxods/spotify-top-50-playlist-songs-anxods) — daily Top 50 charts worldwide and by country.
 
 **Automatic deduplication:** a track appearing in multiple CSVs (global hits in the France, US, and World charts) is processed only once, identified by its `track_id` (MD5 hash of `artist_title`).
+
+**Policy for local test queries:** files stored in `data/raw/` (reference excerpts, microphone captures, local `manifest.json`) are intentionally not versioned on GitHub. The repository only keeps the folder structure, a manifest example, and the supporting documentation in [`data/raw/README.md`](./data/raw/README.md). Real audio files should stay on each teammate's machine or be shared through private storage.
 
 ---
 
@@ -524,6 +561,8 @@ Atomic writes (temp file + rename) to survive crashes during ingestion.
 **SQLite and concurrent access** — if the project resides in an iCloud-synced folder, background uploads can lock `fingerprints.db` and cause `database is locked` errors. The `data/` directory is excluded from iCloud via `xattr`. WAL mode and a retry mechanism are enabled to handle residual contention.
 
 **After `check --purge`** — the FAISS index is removed during the purge. Running `python manage.py rebuild --what index` is mandatory before any identification.
+
+**Microphone recordings stay out of Git** — team-made recordings used for local testing are intentionally excluded from the repository. The professional approach is to version the protocol, the `data/raw/` structure, and a `manifest.example.json`, while keeping the actual audio files in private storage.
 
 ---
 
