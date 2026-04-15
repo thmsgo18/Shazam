@@ -31,9 +31,11 @@ webapp/
 
 ### 1. Backend
 
+Le backend FastAPI appelle le pipeline d'identification principal du projet (`src/api/app.py`). Il faut donc installer les dépendances Python du projet à la racine, pas seulement les dépendances minimales FastAPI.
+
 ```bash
 # Depuis la racine du projet
-pip install -r webapp/backend/requirements.txt
+pip install -r requirements.txt
 
 cd webapp/backend
 uvicorn server:app --reload --port 8000
@@ -50,6 +52,7 @@ npm run dev
 ```
 
 > Vite proxifie automatiquement `/api/*` vers `localhost:8000`.
+> Si vous changez le port du backend en développement, mettez aussi à jour `webapp/frontend/vite.config.js`.
 
 ## Build production
 
@@ -101,8 +104,8 @@ uvicorn server:app --port 8000
 
 - **Bouton micro** — enregistrement de `UI_LISTEN_DURATION` secondes (défaut 15 s) avec décompte animé et anneau de progression
 - **Drag & drop** — déposez un fichier WAV / MP3 / OGG / WebM
-- **Confiance** — badge vert (certain) ou orange (top 3 affiché) selon `score[0]/score[1] ≥ UI_CONFIDENCE_RATIO`
 - **Liens streaming** — YouTube, Spotify, Deezer, Apple Music (recherche, sans clé API)
 - **Recommandations** — autres morceaux du même genre dans la bibliothèque
+- **Vue debug** — bouton `</>` pour afficher le top 10 courant avec les scores finaux renvoyés par l'API
 - **FR / EN** — bascule de langue dans l'entête
-- **Thème sombre** — dark minimal, responsive
+- **Thème sombre / clair** — interface responsive

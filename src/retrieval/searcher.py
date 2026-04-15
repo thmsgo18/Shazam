@@ -16,9 +16,10 @@ import pandas as pd
 import src.config as config
 
 ROOT = Path(__file__).resolve().parents[2]
+_SEARCHER_CACHE: dict[str, tuple[faiss.Index, pd.DataFrame]] = {}
 
 
-def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
+def load_searcher(method: str, force_reload: bool = False) -> tuple[faiss.Index, pd.DataFrame]:
     """
     Charge l'index FAISS et le parquet de segments pour une méthode donnée.
 
@@ -30,9 +31,13 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
         Tuple (index FAISS, DataFrame segments).
 
     Raises:
-        FileNotFoundError: si l'index n'existe pas (build_index.py non lancé).
+        FileNotFoundError: si l'index n'existe pas ou n'a pas été reconstruit.
     """
     key        = config.get_collection_key(method)
+
+    if not force_reload and key in _SEARCHER_CACHE:
+        return _SEARCHER_CACHE[key]
+
     index_type = config.INDEX_TYPE
     index_dir  = ROOT / config.INDEX_DIR
     index_path = index_dir / f"index_{key}_{index_type}.faiss"
@@ -44,11 +49,12 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
             raise FileNotFoundError(
                 f"Pas d'index pour '{method}' (clé='{key}', type={index_type}) dans {index_dir}/.\n"
                 f"Index disponibles : {', '.join(sorted(available))}.\n"
-                f"Change EMBEDDING_METHOD / CLAP_MODEL_NAME dans config.py ou relance build_index.py."
+                f"Change EMBEDDING_METHOD / CLAP_MODEL_NAME dans config.py ou relance "
+                f"`python manage.py rebuild --what index`."
             )
         raise FileNotFoundError(
             f"Aucun index trouvé dans {index_dir}/.\n"
-            f"Lance d'abord : python scripts/download_music.py"
+            f"Lance d'abord : python manage.py ingest"
         )
 
     index = faiss.read_index(str(index_path))
@@ -59,11 +65,21 @@ def load_searcher(method: str) -> tuple[faiss.Index, pd.DataFrame]:
     if not seg_path.exists():
         raise FileNotFoundError(
             f"Fichier d'ordre des segments manquant : {seg_path}\n"
-            f"Lance d'abord : python src/index/build_index.py"
+            f"Lance d'abord : python manage.py rebuild --what index"
         )
     segments = pd.read_parquet(str(seg_path))
 
-    return (index, segments)
+    _SEARCHER_CACHE[key] = (index, segments)
+    return _SEARCHER_CACHE[key]
+
+
+def clear_searcher_cache(method: str | None = None) -> None:
+    """Vide le cache mémoire des index/searchers."""
+    if method is None:
+        _SEARCHER_CACHE.clear()
+        return
+    key = config.get_collection_key(method)
+    _SEARCHER_CACHE.pop(key, None)
 
 
 def search_segments(

@@ -5,7 +5,7 @@ import { useRef, useState, useCallback } from "react";
  * Records from the microphone for `durationSec` seconds using MediaRecorder.
  * Returns { isRecording, countdown, startRecording, blob }
  */
-export default function useRecorder(durationSec = 15) {
+export default function useRecorder(durationSec = 15, microphoneDeniedMessage = "Microphone access denied.") {
   const [isRecording, setIsRecording]   = useState(false);
   const [countdown,   setCountdown]     = useState(durationSec);
   const [blob,        setBlob]          = useState(null);
@@ -23,7 +23,7 @@ export default function useRecorder(durationSec = 15) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      alert("Microphone access denied.");
+      alert(microphoneDeniedMessage);
       return;
     }
 
@@ -59,7 +59,7 @@ export default function useRecorder(durationSec = 15) {
         if (recorder.state !== "inactive") recorder.stop();
       }
     }, 1000);
-  }, [durationSec]);
+  }, [durationSec, microphoneDeniedMessage]);
 
   const stopRecording = useCallback(() => {
     clearInterval(timerRef.current);

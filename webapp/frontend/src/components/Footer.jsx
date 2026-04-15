@@ -1,6 +1,7 @@
 import React from "react";
+import { t } from "../i18n";
 
-export default function Footer() {
+export default function Footer({ lang }) {
   return (
     <footer className="footer">
       <a
@@ -9,7 +10,7 @@ export default function Footer() {
         rel="noopener noreferrer"
         className="footer-link"
       >
-        Projet Shazam — Big Data
+        {t(lang, "footer")}
       </a>
     </footer>
   );

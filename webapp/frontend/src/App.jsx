@@ -30,7 +30,10 @@ export default function App() {
   }, []);
 
   const duration = appConfig.listen_duration ?? DEFAULT_DURATION;
-  const { isRecording, countdown, startRecording, stopRecording } = useRecorder(duration);
+  const { isRecording, countdown, startRecording, stopRecording } = useRecorder(
+    duration,
+    t(lang, "microphoneDenied"),
+  );
 
   useEffect(() => { if (isRecording) setStatus("recording"); }, [isRecording]);
 
@@ -149,7 +152,7 @@ export default function App() {
 
       </main>
 
-      <Footer />
+      <Footer lang={lang} />
     </div>
   );
 }

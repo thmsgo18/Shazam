@@ -50,7 +50,7 @@ def mfcc_stats_embedding(waveform: np.ndarray, sr: int, n_mfcc: int = 20, n_fft:
 
 _CLAP_CACHE = {"model": None, "processor": None, "device": None, "model_name": None}
 
-def _load_clap(model_name: str, device: str | None = None):
+def _load_clap(model_name: str, device: str | None = None, local_files_only: bool = False):
     """
     Load and cache a CLAP model.
     This function loads a pretrained CLAP model, reusing a cached version if available. The model use GPU if available or CPU.
@@ -86,10 +86,14 @@ def _load_clap(model_name: str, device: str | None = None):
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
     import src.config as config
-    processor = ClapProcessor.from_pretrained(model_name)       # Load the CLAP processor.
+    processor = ClapProcessor.from_pretrained(model_name, local_files_only=local_files_only)       # Load the CLAP processor.
     # Float16 uniquement sur CUDA — sur CPU/MPS beaucoup d'opérations ne supportent pas Half
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
-    model = ClapModel.from_pretrained(model_name, torch_dtype=dtype).to(device)
+    model = ClapModel.from_pretrained(
+        model_name,
+        torch_dtype=dtype,
+        local_files_only=local_files_only,
+    ).to(device)
     model.eval()                                                # Set the model to evaluation mode.
 
     # Store loaded objects in cache for faster reuse in future calls :
@@ -189,7 +193,7 @@ def clap_batch_embeddings(
 
 _MUQ_CACHE = {"model": None, "device": None, "model_name": None}
 
-def _load_muq(model_name: str, device: str | None = None):
+def _load_muq(model_name: str, device: str | None = None, local_files_only: bool = False):
     """
     Load and cache a MuQ model (pretrained).
     - Loads once, then reuses from cache for all segments.
@@ -211,7 +215,10 @@ def _load_muq(model_name: str, device: str | None = None):
     import src.config as config
     # Float16 uniquement sur CUDA — sur CPU LayerNorm ne supporte pas Half
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
-    model = MuQ.from_pretrained(model_name).to(dtype).to(device)
+    try:
+        model = MuQ.from_pretrained(model_name, local_files_only=local_files_only).to(dtype).to(device)
+    except TypeError:
+        model = MuQ.from_pretrained(model_name).to(dtype).to(device)
     model.eval()
 
     _MUQ_CACHE.update({"model": model, "device": device, "model_name": model_name})
@@ -346,7 +353,7 @@ def muq_batch_embeddings(
 
 _MERT_CACHE = {"model": None, "processor": None, "device": None, "model_name": None}
 
-def _load_mert(model_name: str, device: str | None = None):
+def _load_mert(model_name: str, device: str | None = None, local_files_only: bool = False):
     """
     Charge et met en cache un modèle MERT (Music undERstanding Transformer).
     MERT est entraîné exclusivement sur de la musique → meilleure robustesse
@@ -378,9 +385,18 @@ def _load_mert(model_name: str, device: str | None = None):
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
     import src.config as config
-    processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name, trust_remote_code=True)
+    processor = Wav2Vec2FeatureExtractor.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        local_files_only=local_files_only,
+    )
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=True, torch_dtype=dtype).to(device)
+    model = AutoModel.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        torch_dtype=dtype,
+        local_files_only=local_files_only,
+    ).to(device)
     model.eval()
 
     _MERT_CACHE.update({"model": model, "processor": processor, "device": device, "model_name": model_name})

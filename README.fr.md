@@ -77,7 +77,7 @@ Audio requête
 │  Découpage en fenêtres de 5s            │
 │  → Embedding (MFCC / CLAP / MuQ / MERT) │
 │  → Recherche FAISS (cosinus)            │
-│  → Top 20 tracks candidats              │
+│  → Top 50 tracks candidats              │
 └────────────────┬────────────────────────┘
                  │
                  ▼
@@ -85,7 +85,7 @@ Audio requête
 │  Stage 2 — Fingerprinting Shazam        │
 │                                         │
 │  Constellation spectrale de la requête  │
-│  ↔ Fingerprints SQLite des 20 candidats │
+│  ↔ Fingerprints SQLite des 50 candidats │
 │  → Alignement temporel (histogramme)    │
 │  → Score de cohérence temporelle        │
 └────────────────┬────────────────────────┘
@@ -95,7 +95,7 @@ Audio requête
       (FP en priorité, FAISS en départage)
 ```
 
-**Stage 1** transforme chaque fenêtre de 5 secondes en vecteur d'embedding via un modèle pré-entraîné, puis interroge l'index FAISS pour trouver les segments les plus proches dans l'espace vectoriel. Les résultats sont agrégés par track pour obtenir les `VECTOR_TOP_N_TRACKS` (défaut : 20) meilleurs candidats.
+**Stage 1** transforme chaque fenêtre de 5 secondes en vecteur d'embedding via un modèle pré-entraîné, puis interroge l'index FAISS pour trouver les segments les plus proches dans l'espace vectoriel. Les résultats sont agrégés par track pour obtenir les `VECTOR_TOP_N_TRACKS` (défaut : 50) meilleurs candidats.
 
 **Stage 2** applique le fingerprinting de Shazam : extraction d'une constellation de pics dans le spectrogramme, comparaison avec les fingerprints stockés en SQLite, et alignement temporel par histogramme d'offsets. Ce score est plus discriminant que la similarité cosinus et résiste mieux aux dégradations audio.
 
@@ -435,50 +435,47 @@ Le projet inclut une suite d'évaluation complète pour mesurer et comparer les 
 |----------|-------------|
 | **Top-1** | Le bon morceau est en première position |
 | **Top-5** | Le bon morceau est dans les 5 premiers résultats |
-| **MRR** | Mean Reciprocal Rank — mesure la qualité du classement |
-| **Latence** | Temps d'identification en secondes |
-
-### Conditions de dégradation
-
-| Condition | Description |
-|-----------|-------------|
-| `clean` | Audio sans dégradation |
-| `snr_20` | Bruit blanc à 20 dB SNR |
-| `snr_10` | Bruit blanc à 10 dB SNR (dégradation forte) |
-| `reverb` | Réverbération simulée |
-| `combo` | SNR 10 dB + réverbération combinés |
+| **Top-10** | Le bon morceau est dans les 10 premiers résultats |
+| **Rang moyen Stage 1** | Position moyenne avec FAISS seul |
+| **Rang moyen final** | Position moyenne après reranking par fingerprinting |
 
 ### Workflow d'évaluation
 
 ```bash
-# 1. Télécharger des extraits de test (30s, position milieu recommandée)
-python manage.py download-test "Miley Cyrus Flowers"        --duration 30 --position middle
-python manage.py download-test "Travis Scott PARASAIL"      --duration 30 --position middle
-python manage.py download-test "The Weeknd Blinding Lights" --duration 30 --position middle
+# 1. Construire le manifest de test avec les vraies requêtes
+#    (extraits de référence dans data/raw/reference_clips/
+#     et enregistrements micro dans data/raw/mic_recordings/)
 
-# 2. Évaluation pipeline complet — Top-1, Top-5, MRR, latence
-python manage.py eval multi
+# 2. Suite d'évaluation principale orientée rapport
+python manage.py eval
 
-# 3. Évaluation impact RIR (Stage 1 avec vs sans augmentation)
-python manage.py eval rir --n-tracks 0
+# 3. Même suite de base, alias explicite
+python manage.py eval base
 
-# 4. Générer les 7 graphiques PNG pour le rapport
-python manage.py eval plots \
-  --eval     results/eval/eval_*.json \
-  --rir-eval results/eval/rir_eval_*.json
+# 4. Analyses ciblées
+python manage.py eval studio-mic
+python manage.py eval duration
+python manage.py eval stage12
+python manage.py eval mic-conditions
+
+# 5. Analyse de l'impact RIR sur les mêmes requêtes du manifest
+python manage.py eval rir
 ```
 
-### Graphiques produits
+### Principales sorties d'évaluation
 
 | Fichier | Graphique | Source |
 |---------|-----------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy avec vs sans RIR par condition | `eval rir` |
-| `rir_delta_*.png` | G2 — Gain Δ apporté par l'augmentation RIR | `eval rir` |
-| `rir_faiss_scores_*.png` | G4 — Score FAISS par morceau avec/sans RIR | `eval rir` |
-| `method_accuracy.png` | G6 — Accuracy Top-1 par méthode et condition | `eval multi` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS seul) vs Stage 2 (+ fingerprint) | `eval multi` |
-| `duration_impact.png` | G11 — Accuracy en fonction de la durée d'extrait | `eval multi` |
-| `heatmap_accuracy.png` | G12 — Heatmap méthodes × conditions | `eval multi` |
+| `results/plots/pipeline_resilience_overview.png` | Graphe principal de la suite de base (Stage 1 vs Stage 2 sur les requêtes réelles du manifest) | `eval`, `eval base` |
+| `results/eval/eval_topk_summary_by_category.csv` | Résumé Top-k par catégorie (`Overall`, `Query type`, `Duration`, `Microphone condition`, `Scenario`) | `eval`, `eval base` |
+| `results/eval/base_eval_rows.json` | Lignes d'évaluation partagées réutilisées par toutes les analyses de base | `eval`, `eval base` |
+| `results/eval/studio_mic.json` | Analyse studio vs microphone | `eval`, `eval studio-mic` |
+| `results/eval/duration.json` | Analyse de la durée (`5s`, `15s`, `30s`) | `eval`, `eval duration` |
+| `results/eval/stage12.json` | Analyse Stage 1 vs Stage 2 | `eval`, `eval stage12` |
+| `results/eval/mic_conditions.json` | Analyse distance / parole sur les enregistrements micro | `eval`, `eval mic-conditions` |
+| `results/plots/rir_pipeline_overview.png` | Graphe avant RIR vs après RIR sur les mêmes requêtes du manifest | `eval rir` |
+| `results/eval/rir_topk_summary_by_category.csv` | Résumé Top-k par catégorie avant vs après RIR | `eval rir` |
+| `results/eval/rir_topk_summary_by_condition.csv` | Résumé RIR par condition (actuellement aligné sur les requêtes `clean` du manifest) | `eval rir` |
 
 ---
 

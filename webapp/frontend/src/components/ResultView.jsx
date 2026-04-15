@@ -4,6 +4,10 @@ import AlbumCover from "./AlbumCover";
 import StreamingLinks from "./StreamingLinks";
 import Recommendations from "./Recommendations";
 
+function formatScore(value) {
+  return Number.isFinite(value) ? value.toFixed(4) : "n/a";
+}
+
 export default function ResultView({ lang, data, onReset, theme, showDebug }) {
   const [leaving, setLeaving] = useState(false);
 
@@ -32,13 +36,13 @@ export default function ResultView({ lang, data, onReset, theme, showDebug }) {
       {/* ── LEFT: back arrow + cover + info ── */}
       <div className="result-split-left">
 
-        <button className="back-btn" onClick={handleBack} aria-label="Retour">
+        <button className="back-btn" onClick={handleBack} aria-label={t(lang, "back")}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M19 12H5"/>
             <polyline points="12 19 5 12 12 5"/>
           </svg>
-          <span>{lang === "fr" ? "Retour" : "Back"}</span>
+          <span>{t(lang, "back")}</span>
         </button>
 
         <div className="result-left-inner">
@@ -58,7 +62,7 @@ export default function ResultView({ lang, data, onReset, theme, showDebug }) {
         {showDebug ? (
           <div className="debug-panel">
             <p className="result-section-label debug-panel-title">
-              {lang === "fr" ? "Top similarités" : "Similarity scores"}
+              {t(lang, "debugTitle")}
             </p>
             <ol className="debug-list">
               {results.slice(0, 10).map((r) => (
@@ -68,7 +72,9 @@ export default function ResultView({ lang, data, onReset, theme, showDebug }) {
                     <span className="debug-title">{r.title}</span>
                     <span className="debug-artist">{r.artist}</span>
                   </span>
-                  <span className="debug-score">{r.score.toFixed(4)}</span>
+                  <span className="debug-score">
+                    {`Final ${formatScore(r.score)} | FAISS ${formatScore(r.score_faiss)} | FP ${formatScore(r.score_fp)}`}
+                  </span>
                 </li>
               ))}
             </ol>

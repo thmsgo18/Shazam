@@ -53,7 +53,6 @@ app.add_middleware(
 )
 
 # ── routes ────────────────────────────────────────────────────────────────────
-
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -104,7 +103,7 @@ async def identify(file: UploadFile = File(...)) -> dict:
         response = build_identification_response(
             pipeline_path,
             top=config.VECTOR_TOP_N_RESULTS,
-            detailed=False,
+            detailed=True,
         )
     except Exception as exc:
         logger.error("build_identification_response failed:\n%s", traceback.format_exc())

@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -31,6 +32,8 @@ if str(ROOT) not in sys.path:
 import src.config as config
 
 METADATA_PATH = ROOT / "data" / "processed" / "metadata.parquet"
+_METADATA_CACHE: dict[str, dict] | None = None
+_METADATA_MTIME_NS: int | None = None
 
 
 def ensure_project_root_context() -> None:
@@ -49,12 +52,21 @@ def _clean(val, default=None):
     return val if val != "" else default
 
 
-def _load_metadata() -> dict[str, dict]:
+def _load_metadata(force_reload: bool = False) -> dict[str, dict]:
     """Retourne {track_id: {...}} depuis metadata.parquet."""
     import pandas as pd
 
+    global _METADATA_CACHE, _METADATA_MTIME_NS
+
     if not METADATA_PATH.exists():
+        _METADATA_CACHE = {}
+        _METADATA_MTIME_NS = None
         return {}
+
+    current_mtime_ns = METADATA_PATH.stat().st_mtime_ns
+    if not force_reload and _METADATA_CACHE is not None and _METADATA_MTIME_NS == current_mtime_ns:
+        return _METADATA_CACHE
+
     df = pd.read_parquet(METADATA_PATH)
     metadata: dict[str, dict] = {}
     for row in df.itertuples(index=False):
@@ -67,7 +79,69 @@ def _load_metadata() -> dict[str, dict]:
             "duration_s": _clean(getattr(row, "duration_s", None)),
             "cover_url":  _clean(getattr(row, "cover_url", None)),
         }
+    _METADATA_CACHE = metadata
+    _METADATA_MTIME_NS = current_mtime_ns
     return metadata
+
+
+def warmup_runtime(
+    method: str | None = None,
+    include_model: bool = False,
+    local_files_only: bool = True,
+) -> dict:
+    """
+    Précharge en mémoire les composants lourds utilisés par l'API web.
+
+    Objectif :
+      - éviter le coût du premier appel /api/identify
+      - charger l'index FAISS + segments
+      - charger les métadonnées
+      - optionnellement initialiser le modèle d'embedding configuré
+    """
+    ensure_project_root_context()
+
+    chosen_method = (method or config.EMBEDDING_METHOD).lower()
+    timings: dict[str, float] = {}
+
+    t0 = time.perf_counter()
+    metadata = _load_metadata()
+    timings["metadata_s"] = round(time.perf_counter() - t0, 3)
+
+    t0 = time.perf_counter()
+    from src.retrieval.searcher import load_searcher
+    index, segments = load_searcher(chosen_method)
+    timings["searcher_s"] = round(time.perf_counter() - t0, 3)
+
+    t0 = time.perf_counter()
+    from src.retrieval.query_pipeline import warmup_fingerprint_store
+    fingerprint_info = warmup_fingerprint_store()
+    timings["fingerprints_s"] = round(time.perf_counter() - t0, 3)
+
+    model_warmed = False
+    if include_model:
+        t0 = time.perf_counter()
+        if chosen_method == "clap":
+            from src.features.embeddings_audio import _load_clap
+            _load_clap(config.CLAP_MODEL_NAME, local_files_only=local_files_only)
+        elif chosen_method == "muq":
+            from src.features.embeddings_audio import _load_muq
+            _load_muq(config.MUQ_MODEL_NAME, local_files_only=local_files_only)
+        elif chosen_method == "mert":
+            from src.features.embeddings_audio import _load_mert
+            _load_mert(config.MERT_MODEL_NAME, local_files_only=local_files_only)
+        timings["model_s"] = round(time.perf_counter() - t0, 3)
+        model_warmed = True
+
+    return {
+        "method": chosen_method,
+        "tracks": len(metadata),
+        "vectors": int(index.ntotal),
+        "segments": int(len(segments)),
+        "fingerprints": fingerprint_info,
+        "model_warmed": model_warmed,
+        "local_files_only": local_files_only,
+        "timings": timings,
+    }
 
 
 def _streaming_links(artist: str, title: str) -> dict[str, str]:
@@ -184,19 +258,19 @@ def build_identification_response(
 
 
 def render_identification_table(results: list[dict], detailed: bool = False) -> None:
-    """Affiche les résultats dans un tableau Rich."""
+    """Render identification results in a Rich table."""
     from rich.console import Console
     from rich.table import Table
 
     console = Console()
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("#", style="dim", width=3)
-    table.add_column("Artiste", width=24)
-    table.add_column("Titre", width=34)
-    table.add_column("Score final", justify="right")
+    table.add_column("Artist", width=24)
+    table.add_column("Title", width=34)
+    table.add_column("Final score", justify="right")
     if detailed:
-        table.add_column("Score FAISS", justify="right")
-        table.add_column("Score FP", justify="right")
+        table.add_column("FAISS score", justify="right")
+        table.add_column("FP score", justify="right")
 
     for row in results:
         artist = row["artist"][:24]
@@ -217,17 +291,17 @@ def render_identification_table(results: list[dict], detailed: bool = False) -> 
 
 
 def run_identify_cli(audio_file: str, method: str | None, top: int, detailed: bool) -> None:
-    """Exécute l'identification canonique et l'affiche pour le CLI."""
+    """Run canonical identification and print it for the CLI."""
     from rich.console import Console
 
     console = Console()
-    console.print(f"\n[bold cyan]Identification de :[/bold cyan] {audio_file}")
+    console.print(f"\n[bold cyan]Identifying:[/bold cyan] {audio_file}")
     if method:
-        console.print(f"[dim]Méthode : {method}[/dim]\n")
+        console.print(f"[dim]Method: {method}[/dim]\n")
 
     results = identify_audio(audio_file, method=method, top=top, detailed=detailed)
     if not results:
-        console.print("[red]Aucun résultat trouvé.[/red]")
+        console.print("[red]No result found.[/red]")
         return
 
     render_identification_table(results, detailed=detailed)
@@ -236,15 +310,15 @@ def run_identify_cli(audio_file: str, method: str | None, top: int, detailed: bo
 if click is not None:
     @click.command()
     @click.argument("audio_file", type=click.Path(exists=True))
-    @click.option("--method",   default=None,  help="mfcc / clap / muq (défaut : config.py)")
-    @click.option("--top",      default=5,     show_default=True, help="Nombre de résultats à afficher")
-    @click.option("--detailed", is_flag=True,  default=False, help="Afficher le détail des scores FAISS et fingerprint")
+    @click.option("--method",   default=None,  help="mfcc / clap / muq (default: config.py)")
+    @click.option("--top",      default=5,     show_default=True, help="Number of results to display")
+    @click.option("--detailed", is_flag=True,  default=False, help="Show FAISS and fingerprint scores separately")
     def identify(audio_file: str, method: str | None, top: int, detailed: bool) -> None:
         """
-        Identifie le morceau correspondant à AUDIO_FILE.
+        Identify the track corresponding to AUDIO_FILE.
 
-        Affiche le classement des morceaux les plus probables avec leur score.
-        Avec --detailed : affiche aussi les scores FAISS et fingerprint séparément.
+        Display the most likely tracks with their scores.
+        With --detailed: also show FAISS and fingerprint scores separately.
         """
         run_identify_cli(audio_file, method=method, top=top, detailed=detailed)
 else:

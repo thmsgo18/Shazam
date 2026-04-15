@@ -67,7 +67,7 @@ MERT_MODEL_NAME  = "m-a-p/MERT-v1-95M"   # Ou "m-a-p/MERT-v1-330M" (plus grand, 
 MERT_SAMPLE_RATE = 24000
 MERT_BATCH_SIZE  = 8
 
-# Téléchargements parallèles (download_music.py)
+# Téléchargements parallèles (python manage.py ingest)
 # Augmenter si connexion rapide, réduire si bans YouTube fréquents
 DOWNLOAD_WORKERS = 5
 
@@ -84,6 +84,7 @@ OPT_FLOAT16              = True   # Charger CLAP/MuQ en demi-précision (float16
 OPT_BATCH_EMBED          = True   # Embedder tous les segments en un seul batch dans identify_track
 OPT_FINGERPRINT_PARALLEL = True   # Charger et fingerprinter les candidats en parallèle (Stage 2)
 OPT_QUERY_DENOISE        = False  # Débruitage spectral noisereduce (non-stationnaire) sur la requête audio
+FINGERPRINT_CACHE_MAX    = 256    # Taille max du cache LRU fingerprints en RAM
 
 # Affichage
 PROGRESS_DATASET  = True   # Barre de progression globale sur l'ensemble des tracks

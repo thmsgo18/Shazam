@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import pickle
 import sqlite3
+from collections import OrderedDict
 from pathlib import Path
 
 # Active le fallback CPU pour les opérations non supportées sur MPS (Apple Silicon).
@@ -36,6 +37,82 @@ from src.audio.preprocessing import iter_segments, preprocess_query
 from src.features.embeddings_audio import embed_segment, muq_batch_embeddings
 from src.retrieval.searcher import load_searcher, search_segments, aggregate_by_track
 from src.features.fingerprint import extract_fingerprint, fingerprint_similarity
+
+_FINGERPRINT_CACHE: OrderedDict[str, set] | None = None
+_FINGERPRINT_DB_MTIME_NS: int | None = None
+
+
+def _enforce_fingerprint_cache_limit(cache: OrderedDict[str, set]) -> None:
+    """Conserve au plus FINGERPRINT_CACHE_MAX fingerprints récents en mémoire."""
+    max_size = max(0, int(getattr(config, "FINGERPRINT_CACHE_MAX", 256)))
+    if max_size == 0:
+        cache.clear()
+        return
+    while len(cache) > max_size:
+        cache.popitem(last=False)
+
+
+def load_fingerprint_cache(force_reload: bool = False) -> OrderedDict[str, set]:
+    """Initialise/retourne le cache mémoire des fingerprints, rempli à la demande."""
+    global _FINGERPRINT_CACHE, _FINGERPRINT_DB_MTIME_NS
+
+    fp_db = ROOT / config.FINGERPRINTS_DB
+    if not fp_db.exists():
+        _FINGERPRINT_CACHE = OrderedDict()
+        _FINGERPRINT_DB_MTIME_NS = None
+        return _FINGERPRINT_CACHE
+
+    current_mtime_ns = fp_db.stat().st_mtime_ns
+    if not force_reload and _FINGERPRINT_CACHE is not None and _FINGERPRINT_DB_MTIME_NS == current_mtime_ns:
+        return _FINGERPRINT_CACHE
+
+    _FINGERPRINT_CACHE = OrderedDict()
+    _FINGERPRINT_DB_MTIME_NS = current_mtime_ns
+    return _FINGERPRINT_CACHE
+
+
+def warmup_fingerprint_store() -> dict[str, int | bool]:
+    """
+    Prépare la couche fingerprints sans charger les 2+ Go de blobs en RAM.
+
+    On initialise le cache mémoire vide et on force un accès SQLite très léger
+    pour éviter que le premier identify paie aussi ce coût d'ouverture.
+    """
+    cache = load_fingerprint_cache()
+    fp_db = ROOT / config.FINGERPRINTS_DB
+    if not fp_db.exists():
+        return {"available": False, "cached": len(cache)}
+
+    with sqlite3.connect(fp_db) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM fingerprints").fetchone()
+
+    return {
+        "available": True,
+        "rows": int(row[0]) if row else 0,
+        "cached": len(cache),
+    }
+
+
+def get_cached_fingerprint(track_id: str) -> set | None:
+    """Retourne le fingerprint d'un track depuis le cache mémoire ou SQLite."""
+    cache = load_fingerprint_cache()
+    if track_id in cache:
+        fingerprint = cache.pop(track_id)
+        cache[track_id] = fingerprint
+        return fingerprint
+
+    fp_db = ROOT / config.FINGERPRINTS_DB
+    if not fp_db.exists():
+        return None
+    with sqlite3.connect(fp_db) as conn:
+        row = conn.execute(
+            "SELECT hashes FROM fingerprints WHERE track_id = ?", (track_id,)
+        ).fetchone()
+    fingerprint = pickle.loads(row[0]) if row else None
+    if fingerprint is not None:
+        cache[track_id] = fingerprint
+        _enforce_fingerprint_cache_limit(cache)
+    return fingerprint
 
 
 def identify_track(
@@ -62,12 +139,13 @@ def identify_track(
         audio_path: chemin vers le fichier audio à identifier.
         method:     méthode d'embedding — None utilise config.EMBEDDING_METHOD.
         top_n:      nombre de résultats finaux à retourner.
-        detailed:   si True, retourne (track_id, score_fp, score_faiss, score_fp)
-                    au lieu de (track_id, score_fp).
+        detailed:   si True, retourne
+                    (track_id, score_final, score_faiss, score_fp)
+                    au lieu de (track_id, score_final).
 
     Returns:
-        Si detailed=False : [(track_id, score_fp), ...]
-        Si detailed=True  : [(track_id, score_fp, score_faiss, score_fp), ...]
+        Si detailed=False : [(track_id, score_final), ...]
+        Si detailed=True  : [(track_id, score_final, score_faiss, score_fp), ...]
     """
     if method is None:
         method = config.EMBEDDING_METHOD # Si pas de méthode donnée on utilise celle du config.
@@ -134,23 +212,10 @@ def identify_track(
         waveform_fp = waveform
     query_fp = extract_fingerprint(waveform_fp, config.SAMPLE_RATE)
 
-    # Fingerprints : chargement depuis SQLite uniquement pour les candidats
-    # (plus efficace que charger tout le fichier — on ne lit que ~20 lignes sur 3000)
-    fp_db = ROOT / config.FINGERPRINTS_DB
-
-    def _get_fp(track_id: str) -> set | None:
-        if not fp_db.exists():
-            return None
-        with sqlite3.connect(fp_db) as conn:
-            row = conn.execute(
-                "SELECT hashes FROM fingerprints WHERE track_id = ?", (track_id,)
-            ).fetchone()
-        return pickle.loads(row[0]) if row else None
-
     def process_candidate(candidate):
         """Récupère le fingerprint d'un candidat et retourne ses scores détaillés."""
         track_id, score_faiss = candidate
-        candidate_fp = _get_fp(track_id)
+        candidate_fp = get_cached_fingerprint(track_id)
         if candidate_fp is None or len(candidate_fp) == 0:
             # Fingerprint manquant ou vide : score FP à 0, FAISS servira de fallback.
             return (track_id, score_faiss, 0.0)
@@ -170,7 +235,19 @@ def identify_track(
     scored.sort(key=lambda x: (x[2], x[1]), reverse=True)
 
     top = scored[:top_n]
+    use_faiss_fallback = not any(score_fp > 0 for _, _, score_fp in top)
 
     if detailed:
-        return [(tid, score_fp, score_faiss, score_fp) for tid, score_faiss, score_fp in top]
-    return [(tid, score_fp) for tid, score_faiss, score_fp in top]
+        return [
+            (
+                tid,
+                score_faiss if use_faiss_fallback else score_fp,
+                score_faiss,
+                score_fp,
+            )
+            for tid, score_faiss, score_fp in top
+        ]
+    return [
+        (tid, score_faiss if use_faiss_fallback else score_fp)
+        for tid, score_faiss, score_fp in top
+    ]

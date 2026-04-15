@@ -386,7 +386,7 @@ def _rebuild_index(collection_key: str, chroma_client) -> None:
 
 def run_augment(
     method: str | None = None,
-    tracks: str = "flowers",
+    tracks: str = "all",
     n_rir: int | None = None,
     rir_dir: str | None = None,
     source: str | None = None,

@@ -2,7 +2,7 @@
 src/utils/fingerprints_db.py
 
 Gestion de la base SQLite des fingerprints audio.
-Partagé entre download_music.py, rebuild_fingerprints.py et check_data.py.
+Partagé entre l'ingestion, la reconstruction des fingerprints et le checker.
 
 Schéma :
     fingerprints(track_id TEXT PRIMARY KEY, hashes BLOB NOT NULL, n_hashes INTEGER NOT NULL)

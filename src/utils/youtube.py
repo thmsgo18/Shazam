@@ -2,7 +2,7 @@
 src/utils/youtube.py
 
 Utilitaires de téléchargement audio via yt-dlp.
-Partagés entre download_music.py, rebuild_fingerprints.py et augment_with_rir.py.
+Partagés entre l'ingestion, la reconstruction des fingerprints et l'augmentation RIR.
 """
 
 from __future__ import annotations

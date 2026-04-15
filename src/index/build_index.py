@@ -182,7 +182,7 @@ if __name__ == "__main__":
         collection_keys = [c.name for c in chroma_client.list_collections()]
         if not collection_keys:
             print("[build_index] Aucune collection trouvée dans ChromaDB.")
-            print("[build_index] Lance d'abord : python scripts/download_music.py")
+            print("[build_index] Lance d'abord : python manage.py ingest")
             sys.exit(1)
         print(f"[build_index] Collections disponibles : {collection_keys}")
 

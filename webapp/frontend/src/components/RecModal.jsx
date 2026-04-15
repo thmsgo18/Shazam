@@ -63,7 +63,7 @@ export default function RecModal({ lang, rec, onClose, theme = "dark" }) {
       <div className="rec-modal" onClick={(e) => e.stopPropagation()}>
 
         {/* Close */}
-        <button className="rec-modal-close" onClick={onClose} aria-label="Fermer">
+        <button className="rec-modal-close" onClick={onClose} aria-label={t(lang, "close")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -94,7 +94,7 @@ export default function RecModal({ lang, rec, onClose, theme = "dark" }) {
             <h2 className="rec-modal-title">{rec.title}</h2>
             {rec.album && (
               <p className="rec-modal-album">
-                <span className="rec-modal-album-label">Album </span>
+                <span className="rec-modal-album-label">{t(lang, "album")} </span>
                 {rec.album}
               </p>
             )}

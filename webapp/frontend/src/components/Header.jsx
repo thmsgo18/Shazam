@@ -1,4 +1,5 @@
 import React from "react";
+import { t } from "../i18n";
 
 const SunIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
@@ -49,15 +50,15 @@ export default function Header({ lang, onToggleLang, theme, onToggleTheme, showD
           <button
             className={`debug-btn${showDebug ? " debug-btn--active" : ""}`}
             onClick={onToggleDebug}
-            aria-label="Afficher les scores de similarité"
-            title={showDebug ? "Masquer les scores" : "Afficher les scores"}
+            aria-label={t(lang, "debugAria")}
+            title={showDebug ? t(lang, "debugHide") : t(lang, "debugShow")}
           >
             <CodeIcon />
           </button>
         )}
 
         {/* Theme toggle: lune / soleil */}
-        <button className="theme-btn" onClick={onToggleTheme} aria-label="Changer le thème">
+        <button className="theme-btn" onClick={onToggleTheme} aria-label={t(lang, "toggleTheme")}>
           <span className={theme === "dark" ? "theme-btn-current" : "theme-btn-other"}>
             <MoonIcon />
           </span>

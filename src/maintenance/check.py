@@ -105,6 +105,44 @@ def _get_chroma_collection(method: str) -> tuple[chromadb.Collection | None, str
         return None, str(e)
 
 
+def _collection_family(collection_key: str) -> str:
+    """Déduit la famille d'embedding depuis une clé de collection ChromaDB."""
+    for family in ("mfcc", "clap", "muq", "mert"):
+        if collection_key == family or collection_key.startswith(f"{family}_"):
+            return family
+    return collection_key
+
+
+def _expected_embedding_dim(collection_key: str) -> int | None:
+    """Retourne la dimension attendue pour une clé de collection donnée."""
+    family = _collection_family(collection_key)
+    if family == "mfcc":
+        return 2 * config.N_MFCC
+    if family == "clap":
+        return 512
+    if family == "muq":
+        return 1024
+    if family == "mert":
+        return 1024 if "330m" in collection_key.lower() else 768
+    return None
+
+
+def _embedded_method_matches_collection(method_key, collection_key: str) -> bool:
+    """Vrai si une entrée embedded_methods correspond à la collection ChromaDB."""
+    if not isinstance(method_key, str):
+        return False
+    if method_key == "mfcc":
+        return collection_key == "mfcc"
+    if ":" not in method_key:
+        return method_key == collection_key
+
+    family, model_name = method_key.split(":", 1)
+    if family not in {"clap", "muq", "mert"}:
+        return False
+    model_slug = model_name.split("/")[-1].replace("-", "_")
+    return collection_key == f"{family}_{model_slug}"
+
+
 # ---------------------------------------------------------------------------
 # Warning dataclass
 # ---------------------------------------------------------------------------
@@ -142,7 +180,7 @@ def check_method(method: str) -> list[Warning]:
             level="CRITIQUE", code="MANQUANT", label="Collection ChromaDB manquante",
             method=method,
             metrics={"Méthode": method, "Erreur": err},
-            action=f"Lancer download_music.py (EMBEDDING_METHOD={method} dans config.py)",
+            action="Lancer `python manage.py ingest` pour (re)créer la collection.",
         ))
         return warns
 
@@ -151,7 +189,7 @@ def check_method(method: str) -> list[Warning]:
         warns.append(Warning(
             level="CRITIQUE", code="VIDE", label="Collection ChromaDB vide",
             method=method,
-            action="Lancer download_music.py pour générer les embeddings",
+            action="Lancer `python manage.py ingest` pour générer les embeddings.",
         ))
         return warns
 
@@ -169,19 +207,15 @@ def check_method(method: str) -> list[Warning]:
         ))
         return warns
 
-    expected_dims = {
-        "mfcc": 2 * config.N_MFCC,
-        "clap": 512,
-        "muq":  768,
-    }
-    if method in expected_dims and emb.shape[1] != expected_dims[method]:
+    expected_dim = _expected_embedding_dim(method)
+    if expected_dim is not None and emb.shape[1] != expected_dim:
         warns.append(Warning(
             level="CRITIQUE", code="C1", label="Dimension embedding inattendue",
             method=method,
             metrics={
                 "Dimension observée": str(emb.shape[1]),
-                "Dimension attendue": str(expected_dims[method]),
-                **({"Config N_MFCC actuel": str(config.N_MFCC)} if method == "mfcc" else {}),
+                "Dimension attendue": str(expected_dim),
+                **({"Config N_MFCC actuel": str(config.N_MFCC)} if _collection_family(method) == "mfcc" else {}),
             },
             action="Vérifier config.py — si N_MFCC a changé, supprimer la collection et relancer",
         ))
@@ -209,7 +243,7 @@ def check_method(method: str) -> list[Warning]:
                     "Segments dans order parquet": str(len(df_order)),
                     "Différence":                  str(abs(n_segments - len(df_order))),
                 },
-                action="Relancer build_index.py pour reconstruire l'index et l'order parquet",
+                action="Relancer `python manage.py rebuild --what index` pour reconstruire l'index.",
             ))
 
     # --- [C5] FAISS index ↔ ChromaDB ---
@@ -226,20 +260,20 @@ def check_method(method: str) -> list[Warning]:
                         "Vecteurs dans ChromaDB": str(n_segments),
                         "Différence":             str(abs(index.ntotal - n_segments)),
                     },
-                    action="Relancer build_index.py",
+                    action="Relancer `python manage.py rebuild --what index`.",
                 ))
         except Exception as e:
             warns.append(Warning(
                 level="CRITIQUE", code="C5", label="FAISS index illisible",
                 method=method,
                 metrics={"Erreur": str(e)},
-                action="Supprimer l'index et relancer build_index.py",
+                action="Relancer `python manage.py rebuild --what index`.",
             ))
     else:
         warns.append(Warning(
             level="CRITIQUE", code="C5", label="FAISS index manquant",
             method=method,
-            action="Relancer build_index.py",
+            action="Relancer `python manage.py rebuild --what index`.",
         ))
 
     # --- Métadonnées ---
@@ -247,7 +281,7 @@ def check_method(method: str) -> list[Warning]:
         warns.append(Warning(
             level="CRITIQUE", code="META", label="metadata.parquet manquant",
             method=method,
-            action="Lancer download_music.py",
+            action="Lancer `python manage.py ingest`.",
         ))
         return warns
 
@@ -279,7 +313,7 @@ def check_method(method: str) -> list[Warning]:
             method=method,
             track_id=oid,
             metrics={"track_id": oid[:16] + "..."},
-            action="Supprimer les segments de ce track et relancer download_music.py",
+            action="Supprimer les segments de ce track puis relancer `python manage.py ingest`.",
         ))
     if len(orphans) > 5:
         warns.append(Warning(
@@ -309,7 +343,7 @@ def check_method(method: str) -> list[Warning]:
                         "Segments réels / attendus": f"{actual} / {expected}  ({actual/expected:.0%})",
                         "Durée du track":            _fmt_dur(duration),
                     },
-                    action="Relancer download_music.py (le track sera re-traité automatiquement)",
+                    action="Relancer `python manage.py ingest` (le track sera re-traité automatiquement).",
                 ))
 
     # --- [Q1] Durée aberrante ---
@@ -358,7 +392,7 @@ def check_method(method: str) -> list[Warning]:
                         "Durée du track": f"{duration:.1f}s",
                         "Écart":          f"{start_s - duration:.1f}s  (tolérance : {Q2_TOLERANCE_S}s)",
                     },
-                    action="Supprimer le track (--purge) et relancer download_music.py",
+                    action="Supprimer le track (`--purge`) puis relancer `python manage.py ingest`.",
                 ))
                 break  # un seul warning par track
 
@@ -380,7 +414,7 @@ def check_method(method: str) -> list[Warning]:
                 artist=str(row["artist"].values[0]) if not row.empty and "artist" in row else None,
                 title=str(row["title"].values[0])   if not row.empty and "title"  in row else None,
                 metrics={"track_id": tid[:16] + "..."},
-                action="Supprimer via --purge et relancer download_music.py",
+                action="Supprimer via `--purge` puis relancer `python manage.py ingest`.",
             ))
 
     # --- Fingerprints ---
@@ -413,7 +447,7 @@ def check_method(method: str) -> list[Warning]:
             },
             action=(
                 "Stage 2 (re-ranking Shazam) inopérant pour ces tracks.\n"
-                "Pour recalculer : utiliser --purge-missing-fp puis relancer download_music.py"
+                "Pour recalculer : utiliser --purge-missing-fp puis relancer `python manage.py ingest`."
             ),
         ))
 
@@ -1034,7 +1068,10 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
                 if methods is None:
                     return None
                 if isinstance(methods, (list, set, np.ndarray)):
-                    updated = [m for m in methods if m != method]
+                    updated = [
+                        m for m in methods
+                        if not _embedded_method_matches_collection(m, method)
+                    ]
                     return updated if updated else None
                 return methods
 
@@ -1115,7 +1152,7 @@ def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
     )
     console.print("[dim]• Segments ChromaDB supprimés pour la méthode purgée uniquement.[/dim]")
     console.print("[dim]• Si le track n'a plus aucune méthode active → ligne metadata + fingerprint supprimés.[/dim]")
-    console.print("[dim]• L'index FAISS de la méthode sera supprimé — relancer build_index.py après.[/dim]")
+    console.print("[dim]• L'index FAISS de la méthode sera supprimé — relancer `python manage.py rebuild --what index` après.[/dim]")
 
     if not yes:
         console.print("")
@@ -1148,7 +1185,7 @@ def _run_purge(by_method: dict[str, set[str]], yes: bool) -> None:
     )
     console.print("\n[dim]Pour re-télécharger et reconstruire l'index :[/dim]")
     console.print("  [bold cyan]python manage.py ingest[/bold cyan]")
-    console.print("  [bold cyan]python src/index/build_index.py[/bold cyan]")
+    console.print("  [bold cyan]python manage.py rebuild --what index[/bold cyan]")
 
 
 def _run_purge_missing_fp(methods: list[str], yes: bool) -> None:

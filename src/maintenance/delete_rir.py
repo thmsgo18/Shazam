@@ -249,7 +249,7 @@ def run_delete_rir(
         f"Vecteurs restants       : [green]{total_after:,}[/green]\n"
         f"Tracks metadata nettoyés: [green]{updated_tracks}[/green]\n\n"
         f"[dim]Pense à reconstruire l'index FAISS :[/dim]\n"
-        f"[dim]python src/index/build_index.py --method {method}[/dim]",
+        f"[dim]python manage.py rebuild --what index[/dim]",
         title="[bold green]Terminé[/bold green]",
         expand=False,
     ))

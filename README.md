@@ -174,9 +174,9 @@ Project/
 │   └── rir/                         # Room Impulse Response WAV files (optional)
 ├── results/
 │   ├── EXPERIMENTS.md               # Experiment log (versioned)
-│   ├── eval/                        # Evaluation JSON files (git-ignored)
-│   ├── benchmark/                   # Benchmark JSON files (git-ignored)
-│   └── plots/                       # PNG charts for the report (git-ignored)
+│   ├── eval/                        # Generated evaluation outputs
+│   ├── benchmark/                   # Benchmark snapshots (some files are versioned in this repo)
+│   └── plots/                       # Generated PNG charts for the report
 └── research_paper/                  # Reference papers (PDF)
 ```
 
@@ -226,6 +226,8 @@ pip install -r requirements.txt
 # 4. Install frontend dependencies
 cd webapp/frontend && npm install && cd ../..
 ```
+
+> For the web interface, install the root `requirements.txt`: the backend imports the full identification pipeline from `src/`, so `webapp/backend/requirements.txt` alone is not sufficient for `/api/identify`.
 
 ---
 
@@ -353,10 +355,10 @@ The web interface allows track recognition directly from the browser, with no ad
 ### Features
 
 - **Microphone recording** — animated countdown, configurable duration via `UI_LISTEN_DURATION`
-- **File upload** — drag-and-drop or file picker (MP3, WAV, FLAC, OGG, WebM…)
-- **Result** — album art, title, artist, confidence score, direct streaming links (YouTube, Spotify, Deezer, Apple Music)
+- **File upload** — drag-and-drop or file picker (MP3, WAV, OGG, WebM)
+- **Result** — album art, title, artist, direct streaming links (YouTube, Spotify, Deezer, Apple Music)
 - **Recommendations** — 4 similar tracks with detail modal and links
-- **Debug mode** — `</>` button: top 10 candidates with separate FP and FAISS scores
+- **Debug mode** — `</>` button: top 10 candidates with the current final ranking scores
 - **Dark / light theme** and **bilingual interface** EN / FR
 
 ### Launch Modes
@@ -365,6 +367,8 @@ The web interface allows track recognition directly from the browser, with no ad
 |------|----------|---------|--------|
 | Development | Vite hot-reload `:5173` | uvicorn `--reload` `:8000` | http://localhost:5173 |
 | Production | Static build in `dist/` | uvicorn `:8000` | http://localhost:8000 |
+
+> In development, the Vite proxy targets `http://localhost:8000` by default. If you change the backend port, update `webapp/frontend/vite.config.js` accordingly.
 
 ---
 
@@ -420,50 +424,47 @@ The project includes a comprehensive evaluation suite to measure and compare pip
 |--------|-------------|
 | **Top-1** | Correct track is in the first position |
 | **Top-5** | Correct track is within the top 5 results |
-| **MRR** | Mean Reciprocal Rank — measures ranking quality |
-| **Latency** | Identification time in seconds |
-
-### Degradation Conditions
-
-| Condition | Description |
-|-----------|-------------|
-| `clean` | No degradation |
-| `snr_20` | White noise at 20 dB SNR |
-| `snr_10` | White noise at 10 dB SNR (heavy degradation) |
-| `reverb` | Simulated reverberation |
-| `combo` | 10 dB SNR + reverberation combined |
+| **Top-10** | Correct track is within the top 10 results |
+| **Mean Stage 1 rank** | Average FAISS-only ranking position |
+| **Mean final rank** | Average ranking position after fingerprint reranking |
 
 ### Evaluation Workflow
 
 ```bash
-# 1. Download test clips (30s, middle position recommended)
-python manage.py download-test "Miley Cyrus Flowers"        --duration 30 --position middle
-python manage.py download-test "Travis Scott PARASAIL"      --duration 30 --position middle
-python manage.py download-test "The Weeknd Blinding Lights" --duration 30 --position middle
+# 1. Build the test manifest with your real queries
+#    (reference excerpts in data/raw/reference_clips/
+#     and microphone recordings in data/raw/mic_recordings/)
 
-# 2. Full pipeline evaluation — Top-1, Top-5, MRR, latency
-python manage.py eval multi
+# 2. Base report-oriented evaluation on the manifest
+python manage.py eval
 
-# 3. RIR impact evaluation (Stage 1 with vs without augmentation)
-python manage.py eval rir --n-tracks 0
+# 3. Same base suite, explicit alias
+python manage.py eval base
 
-# 4. Generate all 7 PNG charts for the report
-python manage.py eval plots \
-  --eval     results/eval/eval_*.json \
-  --rir-eval results/eval/rir_eval_*.json
+# 4. Focused analyses
+python manage.py eval studio-mic
+python manage.py eval duration
+python manage.py eval stage12
+python manage.py eval mic-conditions
+
+# 5. RIR impact analysis on the same manifest queries
+python manage.py eval rir
 ```
 
-### Generated Charts
+### Main Evaluation Outputs
 
 | File | Chart | Source |
 |------|-------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy with vs without RIR by condition | `eval rir` |
-| `rir_delta_*.png` | G2 — Δ gain from RIR augmentation | `eval rir` |
-| `rir_faiss_scores_*.png` | G4 — FAISS score per track with/without RIR | `eval rir` |
-| `method_accuracy.png` | G6 — Top-1 accuracy per method and condition | `eval multi` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS only) vs Stage 2 (+ fingerprint) | `eval multi` |
-| `duration_impact.png` | G11 — Accuracy as a function of clip duration | `eval multi` |
-| `heatmap_accuracy.png` | G12 — Methods × conditions heatmap | `eval multi` |
+| `results/plots/pipeline_resilience_overview.png` | Main base-suite overview plot (Stage 1 vs Stage 2 on real manifest queries) | `eval`, `eval base` |
+| `results/eval/eval_topk_summary_by_category.csv` | Top-k summary by category (`Overall`, `Query type`, `Duration`, `Microphone condition`, `Scenario`) | `eval`, `eval base` |
+| `results/eval/base_eval_rows.json` | Shared base evaluation rows reused by all base analyses | `eval`, `eval base` |
+| `results/eval/studio_mic.json` | Studio vs microphone analysis | `eval`, `eval studio-mic` |
+| `results/eval/duration.json` | Duration analysis (`5s`, `15s`, `30s`) | `eval`, `eval duration` |
+| `results/eval/stage12.json` | Stage 1 vs Stage 2 ranking analysis | `eval`, `eval stage12` |
+| `results/eval/mic_conditions.json` | Microphone distance / speech analysis | `eval`, `eval mic-conditions` |
+| `results/plots/rir_pipeline_overview.png` | Overview plot: without RIR vs with RIR on the same manifest queries | `eval rir` |
+| `results/eval/rir_topk_summary_by_category.csv` | Top-k summary by category, before vs after RIR | `eval rir` |
+| `results/eval/rir_topk_summary_by_condition.csv` | Per-condition RIR summary derived from the manifest queries | `eval rir` |
 
 ---
 
@@ -483,7 +484,7 @@ Vector search index per method and type:
 - `index_{method}_{type}.faiss` — indexed vectors
 - `segments_{method}.parquet` — FAISS position → (`track_id`, `start_s`) mapping
 
-Three index types are available, configurable via `INDEX_TYPE` in `config.py` or `--index-type` at build time:
+Three index types are available, configurable via `INDEX_TYPE` in `src/config.py`:
 
 | Type | Algorithm | Precision | Speed | Parameters |
 |------|-----------|-----------|-------|------------|

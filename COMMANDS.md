@@ -2,6 +2,12 @@
 
 All operations go through `python manage.py <command> [options]`.
 
+Quick help:
+```bash
+python manage.py --help
+python manage.py <command> --help
+```
+
 > **Prerequisite:** activate the virtual environment before any command.
 > ```bash
 > source venv/bin/activate
@@ -16,7 +22,7 @@ All operations go through `python manage.py <command> [options]`.
 | [Construction](#construction) | `build` · `ingest` · `augment` · `enrich` |
 | [Maintenance](#maintenance) | `check` · `rebuild` · `clean` |
 | [Usage](#usage) | `config` · `identify` · `download-test` |
-| [Evaluation](#evaluation) | `eval benchmark` · `eval multi` · `eval rir` · `eval plots` |
+| [Evaluation](#evaluation) | `eval` · `eval base` · `eval studio-mic` · `eval duration` · `eval stage12` · `eval rir` · `eval mic-conditions` |
 | [Web interface](#web-interface) | `webapp` |
 | [Typical workflows](#typical-workflows) | — |
 
@@ -90,15 +96,30 @@ python manage.py ingest
 Applies Room Impulse Responses to all tracks to generate reverberant versions in ChromaDB. Improves Stage 1 robustness against queries captured in reverberant environments. All parameters come from `src/config.py`.
 
 ```bash
-python manage.py augment
+python manage.py augment [OPTIONS]
 ```
 
-No options — configure via `src/config.py`:
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--tracks TEXT` | `all` | Tracks to augment: `all`, `flowers`, or one specific `track_id` |
+
+Other parameters are configured via `src/config.py`:
 
 ```python
 RIR_SOURCE  = "synthetic"   # "synthetic" (generated) | "mit" (real WAV files)
 RIR_N       = 5             # number of RIRs applied per track
 RIR_MIT_DIR = "data/rir"    # MIT WAV directory (if RIR_SOURCE = "mit")
+```
+
+```bash
+# Augment the whole database
+python manage.py augment
+
+# Restrict to Flowers only
+python manage.py augment --tracks flowers
+
+# Restrict to one specific track
+python manage.py augment --tracks f01ab00f1fdc5a57fd2676f4d68631a8
 ```
 
 > **Idempotent:** RIRs already applied to a track are recorded in `metadata.parquet` and skipped on subsequent calls.
@@ -296,7 +317,7 @@ python manage.py identify data/raw/my_audio.mp3 --target f01ab00f1fdc5a57fd2676f
 
 ### `download-test` — Download a test clip
 
-Downloads a track from YouTube into `data/raw/` and registers it in the test manifest (`data/raw/manifest.json`). The manifest is used as ground truth by `eval benchmark`, `eval multi`, and `eval rir`.
+Downloads a track from YouTube into `data/raw/` and registers it in the test manifest (`data/raw/manifest.json`). The manifest is used as ground truth by all `eval` analyses.
 
 ```bash
 python manage.py download-test QUERY [OPTIONS]
@@ -332,162 +353,203 @@ Example: `Miley Cyrus - Flowers (Official Video)__middle_30s.mp3`
 
 ## Evaluation
 
-### `eval benchmark` — Single-track robustness benchmark
+The evaluation CLI is now organized around **report-oriented analyses**. Each command reads the full test manifest, computes a focused analysis, and produces:
 
-Evaluates pipeline robustness on a single audio file across multiple degradation conditions. The target track is auto-detected from `data/raw/manifest.json`.
+- a JSON payload in `results/eval/`
+- a Markdown summary in `results/eval/`
+- CSV summaries in `results/eval/`
+- PNG figures in `results/plots/` when relevant
 
-```bash
-python manage.py eval benchmark [AUDIO] [OPTIONS]
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `AUDIO` | — | Audio file to benchmark (must be in `manifest.json`) |
-| `--label` | timestamp | Run name for traceability |
-| `--full` | `False` | Full test suite (~10 cases) instead of the default 4 fast cases |
-| `--compare JSON` | — | Compare existing result JSONs without re-running (repeatable) |
-
-```bash
-# Quick benchmark (4 cases: clean + SNR20 + light reverb + combo)
-python manage.py eval benchmark data/raw/flowers__middle_30s.mp3
-
-# With a label for traceability
-python manage.py eval benchmark data/raw/flowers__middle_30s.mp3 --label "clap-v2"
-
-# Full suite (~10 degradation cases)
-python manage.py eval benchmark data/raw/flowers__middle_30s.mp3 --full
-
-# Compare two previous runs (no re-execution)
-python manage.py eval benchmark \
-  --compare results/benchmark/run-clap-v1.json \
-  --compare results/benchmark/run-clap-v2.json
-```
-
-**Default test cases (fast mode):**
-
-| # | Degradation | Parameters |
-|---|-------------|------------|
-| 1 | Clean audio | — |
-| 2 | White noise | SNR = 20 dB |
-| 3 | Light reverb | RT60 ≈ 0.4 s |
-| 4 | Combo | SNR 20 dB + reverb |
-
-**Additional cases in `--full` mode:** heavier noise (SNR 10 dB), high-pass filter (simulates phone), Opus compression (64 kbps), short clip (5 s), and more.
+By default, all evaluations use the active embedding method from `src/config.py`.
 
 ---
 
-### `eval multi` — Multi-track evaluation
+### `eval` — Run the base report suite
 
-Evaluates the full pipeline over multiple test tracks and degradation conditions. Computes Top-1, Top-5, MRR, and latency per method × condition. Produces JSON results and PNG charts.
+Runs the shared base evaluation once, then derives the base report analyses from that common table:
+
+- `base-eval-rows`
+- `studio-mic`
+- `duration`
+- `stage12`
+- `mic-conditions`
 
 ```bash
-python manage.py eval multi [OPTIONS]
+python manage.py eval [OPTIONS]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
-| `--no-plot` | `False` | Skip PNG chart generation |
-
-Methods and conditions are read from `src/config.py`.
+| `--no-plot` | `False` | Skip chart generation |
 
 ```bash
-# Full evaluation (all tracks in manifest)
-python manage.py eval multi
+# Full base evaluation suite on all manifest tracks
+python manage.py eval
 
-# Limit to 5 tracks (quick check)
-python manage.py eval multi --n-tracks 5
+# Quick run on 3 tracks
+python manage.py eval --n-tracks 3
 
-# Without charts
-python manage.py eval multi --no-plot
+# Metrics only, no PNG figures
+python manage.py eval --n-tracks 5 --no-plot
 ```
 
-**Output:**
-- `results/eval/eval_TIMESTAMP.json` — full metrics
-- `results/plots/method_accuracy.png` — G6: accuracy per method × condition
-- `results/plots/stage_comparison.png` — G9: Stage 1 vs Stage 2
-- `results/plots/duration_impact.png` — G11: accuracy vs clip duration
-- `results/plots/heatmap_accuracy.png` — G12: methods × conditions heatmap
-
-**Prerequisite:** test clips registered in the manifest via `download-test`.
+**Main outputs:**
+- `results/eval/base_eval_rows.json`
+- `results/eval/base_eval_rows.md`
+- `results/eval/eval_base_summary.json`
+- `results/eval/eval_base_summary.md`
+- `results/eval/eval_topk_summary_by_category.csv`
+- `results/plots/pipeline_resilience_overview.png`
+- per-analysis JSON / Markdown
 
 ---
 
-### `eval rir` — RIR impact evaluation
+### `eval base` — Explicit alias for the base suite
 
-Evaluates the impact of RIR augmentation on Stage 1 accuracy (with vs. without augmented vectors). Builds a temporary index in memory — **does not modify the database**.
+Runs the same shared base suite as `python manage.py eval`.
 
 ```bash
-python manage.py eval rir [AUDIO] [OPTIONS]
+python manage.py eval base [OPTIONS]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `AUDIO` | — | Single audio file for single-track analysis |
-| `--target TRACK_ID` | auto-detected | Expected track ID (reads manifest if omitted) |
-| `--n-tracks` | `0` (all) | Multi-track mode: evaluate N tracks from the manifest |
-| `--no-plot` | `False` | Skip PNG chart generation |
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
 
 ```bash
-# Single-track RIR analysis
-python manage.py eval rir data/raw/flowers__middle_30s.mp3
+python manage.py eval base
+python manage.py eval base --n-tracks 3
+```
 
-# Multi-track evaluation (all manifest tracks)
-python manage.py eval rir --n-tracks 0
+---
 
-# Limit to 5 tracks
+### `eval studio-mic` — Studio vs microphone comparison
+
+Compares clean reference excerpts against real microphone captures for the same tracks.
+
+```bash
+python manage.py eval studio-mic [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
+
+```bash
+python manage.py eval studio-mic
+python manage.py eval studio-mic --n-tracks 4
+```
+
+**Typical figures:**
+- `scatter_studio_micro_stage1_vs_final_rank.png`
+
+---
+
+### `eval duration` — Effect of query duration
+
+Analyzes the effect of excerpt duration on retrieval quality, using the studio clips present in the manifest (typically `5s`, `15s`, `30s`).
+
+```bash
+python manage.py eval duration [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
+
+```bash
+python manage.py eval duration
+python manage.py eval duration --n-tracks 5
+```
+
+**Typical figures:**
+- `scatter_duration_vs_final_rank.png`
+
+---
+
+### `eval stage12` — Stage 1 vs final pipeline
+
+Compares Stage 1 (FAISS only) with the final ranking after Stage 2 re-ranking.
+
+```bash
+python manage.py eval stage12 [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
+
+```bash
+python manage.py eval stage12
+python manage.py eval stage12 --n-tracks 5
+```
+
+**Typical figures:**
+- `scatter_stage1_vs_stage2_rank.png`
+
+---
+
+### `eval rir` — With vs without RIR augmentation
+
+Measures the contribution of the RIR-augmented vectors by comparing retrieval performance with and without them. This analysis is intentionally separate from the shared base suite, because it uses a different comparison path and different index loading logic. It now uses the original queries from `data/raw/manifest.json` as-is, so the comparison is aligned with the main pipeline overview.
+
+```bash
+python manage.py eval rir [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
+
+```bash
+python manage.py eval rir
 python manage.py eval rir --n-tracks 5
 ```
 
-**Output:**
-- `results/eval/rir_eval_TIMESTAMP.json`
-- `results/plots/rir_paired_bar_*.png` — G1: accuracy with vs without RIR
-- `results/plots/rir_delta_*.png` — G2: Δ gain from RIR augmentation
-- `results/plots/rir_faiss_scores_*.png` — G4: FAISS score per track with/without RIR
+**Typical figure:**
+- `results/plots/rir_pipeline_overview.png`
+
+**Main outputs:**
+- `results/eval/rir_eval.json`
+- `results/eval/rir_analysis.json`
+- `results/eval/rir_analysis.md`
+- `results/eval/rir_topk_summary_by_category.csv`
+- `results/eval/rir_topk_summary_by_condition.csv`
+- `results/plots/rir_pipeline_overview.png`
+- resume cache in `results/eval/cache/`
+
+`eval rir` now keeps only the dedicated overview chart in `results/plots/`:
+- `rir_pipeline_overview.png`
 
 ---
 
-### `eval plots` — Generate charts from existing results
+### `eval mic-conditions` — Microphone condition analysis
 
-Reads JSON files produced by `eval multi` and/or `eval rir` and generates PNG charts for the report. Does not re-run any evaluation.
+Analyzes the impact of microphone recording conditions such as distance (`close`, `normal`, `far`) and concurrent speech (`clean`, `speech`).
 
 ```bash
-python manage.py eval plots [OPTIONS]
+python manage.py eval mic-conditions [OPTIONS]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--eval JSON` | — | Evaluation JSON file(s) from `eval multi` (repeatable) |
-| `--rir-eval JSON` | — | Evaluation JSON file(s) from `eval rir` (repeatable) |
-| `--out-dir PATH` | `results/plots/` | Output directory |
+| `--n-tracks` | `0` (all) | Limit evaluation to N tracks from the manifest |
+| `--no-plot` | `False` | Skip chart generation |
 
 ```bash
-# Pipeline charts only (G6, G9, G11, G12)
-python manage.py eval plots --eval results/eval/eval_*.json
-
-# RIR charts only (G1, G2, G4)
-python manage.py eval plots --rir-eval results/eval/rir_eval_*.json
-
-# All 7 charts
-python manage.py eval plots \
-  --eval     results/eval/eval_*.json \
-  --rir-eval results/eval/rir_eval_*.json
-
-# Custom output directory
-python manage.py eval plots --eval results/eval/eval_*.json --out-dir /tmp/charts
+python manage.py eval mic-conditions
+python manage.py eval mic-conditions --n-tracks 5
 ```
 
-**Charts produced:**
-
-| File | Chart | Source |
-|------|-------|--------|
-| `rir_paired_bar_*.png` | G1 — Accuracy with vs without RIR | `--rir-eval` |
-| `rir_delta_*.png` | G2 — Δ gain from RIR augmentation | `--rir-eval` |
-| `rir_faiss_scores_*.png` | G4 — FAISS score per track with/without RIR | `--rir-eval` |
-| `method_accuracy.png` | G6 — Top-1 accuracy per method × condition | `--eval` |
-| `stage_comparison.png` | G9 — Stage 1 (FAISS only) vs Stage 2 (+ fingerprint) | `--eval` |
-| `duration_impact.png` | G11 — Accuracy as a function of clip duration | `--eval` |
-| `heatmap_accuracy.png` | G12 — Methods × conditions heatmap | `--eval` |
+**Typical figures:**
+- `scatter_studio_vs_micro_rank.png`
+- `scatter_micro_clean_vs_speech_rank.png`
 
 ---
 
@@ -505,6 +567,7 @@ python manage.py webapp [OPTIONS]
 |--------|---------|-------------|
 | `--prod` | `False` | Production mode (static build, single port) |
 | `--port` | `8000` | FastAPI backend port |
+| `--reload / --no-reload` | `reload` | Enable or disable FastAPI hot reload in dev mode |
 
 ```bash
 # Development mode (Vite hot-reload)
@@ -515,8 +578,12 @@ python manage.py webapp
 python manage.py webapp --prod
 # → http://localhost:8000
 
-# Custom port
+# Custom port in development
+# Requires updating webapp/frontend/vite.config.js
+# because the Vite proxy targets localhost:8000 by default
 python manage.py webapp --port 8080
+
+# Custom port in production
 python manage.py webapp --prod --port 9000
 ```
 
@@ -524,6 +591,8 @@ python manage.py webapp --prod --port 9000
 |------|----------|---------|-----|
 | Dev | Vite hot-reload `:5173` | uvicorn `--reload` `:8000` | http://localhost:5173 |
 | Prod | Static build in `dist/` | uvicorn `:8000` | http://localhost:8000 |
+
+> In dev mode, the frontend proxy is hard-coded to `http://localhost:8000` in `webapp/frontend/vite.config.js`. If you change the backend port, update that proxy target too.
 
 ---
 
@@ -581,24 +650,26 @@ python manage.py clean --track <track_id> --yes
 python manage.py rebuild --what index
 ```
 
-### Generate report charts
+### Run the report evaluations
 
 ```bash
-# 1. Download test clips
-python manage.py download-test "Miley Cyrus Flowers"        --duration 30 --position middle
-python manage.py download-test "Travis Scott PARASAIL"      --duration 30 --position middle
-python manage.py download-test "The Weeknd Blinding Lights" --duration 30 --position middle
+# 1. Shared base suite (single evaluation pass reused by multiple analyses)
+python manage.py eval
 
-# 2. Full pipeline evaluation (Top-1, Top-5, MRR, latency)
-python manage.py eval multi
+# 2. Explicit alias if you want to be clear in scripts
+python manage.py eval base
 
-# 3. RIR impact evaluation
-python manage.py eval rir --n-tracks 0
+# 3. Focus on one analysis only
+python manage.py eval studio-mic
+python manage.py eval duration
+python manage.py eval stage12
+python manage.py eval mic-conditions
 
-# 4. Generate all 7 PNG charts
-python manage.py eval plots \
-  --eval     results/eval/eval_*.json \
-  --rir-eval results/eval/rir_eval_*.json
+# 4. Run the separate RIR comparison
+python manage.py eval rir
+
+# 5. Quick run on a subset of tracks
+python manage.py eval --n-tracks 3
 ```
 
 ### Quick health check

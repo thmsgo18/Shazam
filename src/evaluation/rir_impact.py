@@ -13,15 +13,17 @@ Point d'entrée public : run_rir_impact(audio, target_track_id, top, method)
 
 from __future__ import annotations
 
+import gc
 import sys
 from pathlib import Path
 
 import chromadb
+import faiss
 import numpy as np
 import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn, TextColumn
 from rich.table import Table
 from rich import box
 
@@ -32,6 +34,7 @@ from src.features.embeddings_audio import embed_segment
 
 ROOT    = Path(__file__).resolve().parents[2]
 console = Console()
+_NO_RIR_CACHE: dict[str, tuple[faiss.Index, pd.DataFrame]] = {}
 
 FLOWERS_ID    = "f01ab00f1fdc5a57fd2676f4d68631a8"
 AUDIO_DEFAULT = str(ROOT / "data" / "raw" / "93-Rue-Belliard.mp3")
@@ -47,8 +50,6 @@ def _load_no_rir_index(collection_key: str):
     Charge uniquement les vecteurs NON-RIR depuis ChromaDB et construit
     un index FAISS en mémoire + DataFrame segments.
     """
-    import faiss  # import lazy — APRÈS le chargement du modèle PyTorch
-
     client     = chromadb.PersistentClient(path=str(ROOT / config.CHROMA_DIR))
     collection = client.get_collection(name=collection_key)
     total      = collection.count()
@@ -58,14 +59,15 @@ def _load_no_rir_index(collection_key: str):
 
     with Progress(
         SpinnerColumn(),
-        "[progress.description]{task.description}",
+        TextColumn("[bold cyan]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
+        TextColumn("{task.fields[current]}"),
         console=console,
-        transient=True,
+        transient=False,
     ) as prog:
-        task   = prog.add_task("Chargement vecteurs originaux…", total=total)
+        task   = prog.add_task("No-RIR index", total=total, current="fetching ChromaDB vectors")
         offset = 0
         while True:
             page = collection.get(limit=PAGE, offset=offset, include=["embeddings", "metadatas"])
@@ -76,6 +78,7 @@ def _load_no_rir_index(collection_key: str):
                     embeddings_list.append(emb)
                     metadatas_list.append(meta)
             prog.advance(task, len(page["ids"]))
+            prog.update(task, current=f"kept {len(embeddings_list):,} original vectors")
             if len(page["ids"]) < PAGE:
                 break
             offset += PAGE
@@ -95,10 +98,49 @@ def _load_no_rir_index(collection_key: str):
     faiss.omp_set_num_threads(1)
     index = faiss.IndexFlatIP(xb.shape[1])
     index.add(xb)
+    del xb
+    del norms
+    gc.collect()
     console.print(f"  [green]✓ Index prêt ({index.ntotal:,} vecteurs)[/green]\n")
 
     segments = pd.DataFrame(metadatas_list)
     return index, segments
+
+
+def _no_rir_index_paths(collection_key: str) -> tuple[Path, Path]:
+    index_dir = ROOT / config.INDEX_DIR
+    index_dir.mkdir(parents=True, exist_ok=True)
+    return (
+        index_dir / f"index_{collection_key}_no_rir_flat.faiss",
+        index_dir / f"segments_{collection_key}_no_rir.parquet",
+    )
+
+
+def load_no_rir_index_cached(collection_key: str, force_rebuild: bool = False) -> tuple[faiss.Index, pd.DataFrame]:
+    """
+    Charge l'index SANS RIR depuis un cache disque si disponible.
+    Sinon le construit depuis ChromaDB, puis le sauvegarde.
+    """
+    if not force_rebuild and collection_key in _NO_RIR_CACHE:
+        return _NO_RIR_CACHE[collection_key]
+
+    index_path, seg_path = _no_rir_index_paths(collection_key)
+    if not force_rebuild and index_path.exists() and seg_path.exists():
+        console.print("[yellow]Chargement de l'index SANS RIR depuis le disque…[/yellow]")
+        index = faiss.read_index(str(index_path))
+        segments = pd.read_parquet(seg_path)
+        console.print(f"  [green]✓ Index SANS RIR chargé ({index.ntotal:,} vecteurs)[/green]\n")
+        _NO_RIR_CACHE[collection_key] = (index, segments)
+        return _NO_RIR_CACHE[collection_key]
+
+    console.print("[yellow]Construction de l'index SANS RIR…[/yellow]")
+    index, segments = _load_no_rir_index(collection_key)
+    console.print("[yellow]Sauvegarde de l'index SANS RIR…[/yellow]")
+    faiss.write_index(index, str(index_path))
+    segments.to_parquet(seg_path, index=False)
+    console.print(f"  [green]✓ Cache disque SANS RIR écrit[/green]\n")
+    _NO_RIR_CACHE[collection_key] = (index, segments)
+    return _NO_RIR_CACHE[collection_key]
 
 
 def _search(index, segments: pd.DataFrame, query_emb: np.ndarray, k: int) -> dict[str, float]:
@@ -128,13 +170,19 @@ def _rank_label(rank: int | None) -> str:
     return f"[red]#{rank}[/red]"
 
 
-def _load_model(method: str) -> None:
+def _load_model(method: str, verbose: bool = True) -> None:
     """Charge le modèle AVANT faiss (Apple Silicon)."""
     if method == "clap":
-        from src.features.embeddings_audio import _load_clap
-        console.print(f"[cyan]Chargement {config.CLAP_MODEL_NAME}…[/cyan]")
+        from src.features.embeddings_audio import _CLAP_CACHE, _load_clap
+        already_loaded = (
+            _CLAP_CACHE.get("model") is not None
+            and _CLAP_CACHE.get("model_name") == config.CLAP_MODEL_NAME
+        )
+        if verbose and not already_loaded:
+            console.print(f"[cyan]Loading {config.CLAP_MODEL_NAME}…[/cyan]")
         _load_clap(config.CLAP_MODEL_NAME)
-        console.print("[green]✓ Modèle prêt.[/green]\n")
+        if verbose and not already_loaded:
+            console.print("[green]✓ Model ready.[/green]\n")
     elif method == "muq":
         from src.features.embeddings_audio import _load_muq
         _load_muq(config.MUQ_MODEL_NAME)
@@ -185,7 +233,7 @@ def run_rir_impact(
     ))
 
     # Chargement modèle AVANT faiss (Apple Silicon)
-    _load_model(method)
+    _load_model(method, verbose=False)
 
     # Embeddings de la requête
     console.print("[yellow]Préparation de la requête audio…[/yellow]")
@@ -205,8 +253,7 @@ def run_rir_impact(
         query_embeddings.append(emb)
 
     # Index SANS RIR (en mémoire)
-    console.print("[yellow]Construction de l'index SANS RIR…[/yellow]")
-    index_no_rir, segments_no_rir = _load_no_rir_index(collection_key)
+    index_no_rir, segments_no_rir = load_no_rir_index_cached(collection_key)
     console.print(f"  Index sans RIR : [white]{index_no_rir.ntotal:,}[/white] vecteurs\n")
 
     # Index AVEC RIR (fichier existant)
@@ -333,7 +380,7 @@ def rir_impact_scores(
     }.get(method, config.SAMPLE_RATE)
 
     # Chargement du modèle AVANT faiss (Apple Silicon)
-    _load_model(method)
+    _load_model(method, verbose=False)
 
     # Embedding des segments de la requête
     waveform, sr = load_audio(audio_path, target_sr=targ_sr)
@@ -354,7 +401,7 @@ def rir_impact_scores(
     if prebuilt_no_rir is not None:
         index_no_rir, segments_no_rir = prebuilt_no_rir
     else:
-        index_no_rir, segments_no_rir = _load_no_rir_index(collection_key)
+        index_no_rir, segments_no_rir = load_no_rir_index_cached(collection_key)
 
     # Index AVEC RIR (fichier existant sur disque)
     from src.retrieval.searcher import load_searcher

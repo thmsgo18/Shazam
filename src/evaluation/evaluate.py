@@ -29,6 +29,8 @@ import re
 import sqlite3
 import tempfile
 import time
+import gc
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -36,11 +38,22 @@ import librosa
 import numpy as np
 import pandas as pd
 import soundfile as sf
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 ROOT         = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "data" / "raw" / "manifest.json"
 METADATA_PATH = ROOT / "data" / "processed" / "metadata.parquet"
 RESULTS_DIR   = ROOT / "results" / "eval"
+CACHE_DIR     = RESULTS_DIR / "cache"
+console       = Console()
 
 # Réutilise les fonctions de dégradation déjà présentes dans benchmark.py
 from src.evaluation.benchmark import (
@@ -61,6 +74,107 @@ CONDITION_LABELS = {
     "reverb": "Reverb",
     "combo":  "Combo (15 dB+Rev+BP)",
 }
+
+
+def _ensure_eval_dirs(out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _manifest_signature(manifest: list[dict], methods: list[str], conditions: list[str]) -> str:
+    payload = {
+        "methods": methods,
+        "conditions": conditions,
+        "entries": [
+            {
+                "filename": e.get("filename"),
+                "track_id": e.get("track_id"),
+                "position": e.get("position"),
+                "duration_s": e.get("duration_s"),
+            }
+            for e in manifest
+        ],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.md5(raw).hexdigest()[:12]
+
+
+def _rir_cache_path(manifest: list[dict], methods: list[str], conditions: list[str]) -> Path:
+    methods_slug = "_".join(sorted(methods)).replace("/", "_").replace("-", "_")
+    sig = _manifest_signature(manifest, methods, conditions)
+    return CACHE_DIR / f"rir_eval_resume_{methods_slug}_{sig}.jsonl"
+
+
+def _load_jsonl_cache(path: Path) -> dict[str, dict]:
+    cache: dict[str, dict] = {}
+    if not path.exists():
+        return cache
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = row.get("_cache_key")
+            if key:
+                cache[key] = row
+    return cache
+
+
+def _append_jsonl_cache(path: Path, row: dict) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def _rir_row_cache_key(method: str, condition: str, entry: dict) -> str:
+    return f"{method}::{condition}::{entry['track_id']}::{entry['filename']}"
+
+
+def _release_eval_memory() -> None:
+    gc.collect()
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:
+        pass
+
+
+def _preload_embedding_model(method: str) -> None:
+    if method == "clap":
+        from src import config as _cfg
+        from src.features.embeddings_audio import _CLAP_CACHE, _load_clap
+        already_loaded = (
+            _CLAP_CACHE.get("model") is not None
+            and _CLAP_CACHE.get("model_name") == _cfg.CLAP_MODEL_NAME
+        )
+        if not already_loaded:
+            console.print(f"[cyan]Loading {_cfg.CLAP_MODEL_NAME}…[/cyan]")
+        _load_clap(_cfg.CLAP_MODEL_NAME)
+        if not already_loaded:
+            console.print("[green]✓ Model ready.[/green]\n")
+    elif method == "muq":
+        from src import config as _cfg
+        from src.features.embeddings_audio import _load_muq
+        _load_muq(_cfg.MUQ_MODEL_NAME)
+    elif method == "mert":
+        from src import config as _cfg
+        from src.features.embeddings_audio import _load_mert
+        _load_mert(_cfg.MERT_MODEL_NAME)
+
+
+def _rir_progress_label(entry: dict, method: str, condition: str) -> str:
+    label = (
+        f"[{method}] "
+        f"{entry.get('artist', '?')} — {entry.get('title', '?')} "
+        f"| {CONDITION_LABELS.get(condition, condition)}"
+    )
+    label = label.replace("\n", " ")
+    return label[:110] + "..." if len(label) > 113 else label
 
 
 def _apply_condition(waveform: np.ndarray, sr: int, condition: str) -> np.ndarray:
@@ -110,6 +224,20 @@ def load_manifest(path: Path = MANIFEST_PATH) -> list[dict]:
     return [e for e in data if (raw_dir / e["filename"]).exists()]
 
 
+def _filter_rir_manifest_entries(entries: list[dict]) -> list[dict]:
+    """
+    `eval rir` ne doit comparer que les vraies requêtes du rapport :
+    - data/raw/reference_clips/*
+    - data/raw/mic_recordings/*
+    """
+    allowed_prefixes = ("reference_clips/", "mic_recordings/")
+    return [
+        entry
+        for entry in entries
+        if str(entry.get("filename", "")).startswith(allowed_prefixes)
+    ]
+
+
 def find_track_id_by_query(query: str) -> str | None:
     """
     Cherche un track_id dans metadata.parquet par correspondance textuelle.
@@ -156,29 +284,49 @@ def _evaluate_one(
         {top1, top5, rank, score_final, score_faiss, score_fp, latency_s, error}
     """
     from src.retrieval.query_pipeline import identify_track
+    from src import config
 
-    base_sr = 22050
-    try:
-        waveform, sr = librosa.load(str(audio_path), sr=base_sr, mono=True)
-    except Exception as e:
-        return {"top1": False, "top5": False, "rank": None,
-                "score_final": None, "score_faiss": None, "score_fp": None,
-                "latency_s": 0.0, "error": f"load: {e}"}
+    if method is None:
+        method = config.EMBEDDING_METHOD
 
-    degraded = _apply_condition(waveform, sr, condition)
+    # Important: for the clean case, evaluate the original file directly.
+    # Re-encoding every query through a 22.05 kHz temporary WAV was altering
+    # some clips enough to change CLAP retrieval behavior compared with
+    # `manage.py identify`, which consumes the original file.
+    if condition == "clean":
+        tmp_path = str(audio_path)
+        cleanup_tmp = False
+    else:
+        if method == "clap":
+            base_sr = config.CLAP_SAMPLE_RATE
+        elif method == "muq":
+            base_sr = config.MUQ_SAMPLE_RATE
+        elif method == "mert":
+            base_sr = config.MERT_SAMPLE_RATE
+        else:
+            base_sr = config.SAMPLE_RATE
 
-    tmp_path = None
-    try:
+        try:
+            waveform, sr = librosa.load(str(audio_path), sr=base_sr, mono=True)
+        except Exception as e:
+            return {"top1": False, "top5": False, "rank": None,
+                    "score_final": None, "score_faiss": None, "score_fp": None,
+                    "latency_s": 0.0, "error": f"load: {e}"}
+
+        degraded = _apply_condition(waveform, sr, condition)
         tmp_path = save_temp_wav(degraded, sr)
+        cleanup_tmp = True
+
+    try:
         t0 = time.time()
-        results = identify_track(tmp_path, method=method, detailed=True)
+        results = identify_track(str(tmp_path), method=method, detailed=True)
         latency = round(time.time() - t0, 2)
     except Exception as e:
         return {"top1": False, "top5": False, "rank": None,
                 "score_final": None, "score_faiss": None, "score_fp": None,
                 "latency_s": 0.0, "error": f"identify: {e}"}
     finally:
-        if tmp_path and os.path.exists(tmp_path):
+        if cleanup_tmp and tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
     if not results:
@@ -438,15 +586,13 @@ def run_rir_evaluate(
         plot:       générer les graphiques après.
     """
     import src.config as _cfg
-    from src.evaluation.rir_impact import rir_impact_scores, _load_no_rir_index
-
     if methods is None:
         methods = [_cfg.EMBEDDING_METHOD]
     if conditions is None:
         conditions = ALL_CONDITIONS
 
     out_dir = Path(out_dir) if out_dir else RESULTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_eval_dirs(out_dir)
 
     manifest = load_manifest()
     if not manifest:
@@ -456,12 +602,34 @@ def run_rir_evaluate(
         )
         return {}
 
+    manifest = _filter_rir_manifest_entries(manifest)
+    if not manifest:
+        print(
+            "[rir-evaluate] ⚠  Aucune entrée compatible pour RIR.\n"
+            "               Attendu : data/raw/reference_clips/* ou data/raw/mic_recordings/*"
+        )
+        return {}
+
     if n_tracks > 0:
         manifest = manifest[:n_tracks]
 
     raw_dir = ROOT / "data" / "raw"
-    print(f"\n[rir-evaluate] {len(manifest)} track(s) | méthodes : {methods} | "
-          f"conditions : {conditions}\n{'─'*70}")
+    cache_path = _rir_cache_path(manifest, methods, conditions)
+    resume_cache = _load_jsonl_cache(cache_path)
+    console.print(
+        f"\n[rir-evaluate] {len(manifest)} track(s) | méthodes : {methods} | "
+        f"conditions : {conditions}\n{'─'*70}"
+    )
+    expected_keys = {
+        _rir_row_cache_key(method, condition, entry)
+        for method in methods
+        for entry in manifest
+        for condition in conditions
+    }
+    resumed = sum(1 for key in expected_keys if key in resume_cache)
+    if resumed:
+        console.print(f"[rir-evaluate] Reprise trouvée : {resumed}/{len(expected_keys)} évaluation(s) déjà calculée(s)")
+    console.print(f"[rir-evaluate] Cache de reprise : {cache_path}")
 
     # Structure : results[method][condition] = {with_rir: [...], without_rir: [...]}
     per_method: dict = {
@@ -469,75 +637,126 @@ def run_rir_evaluate(
         for m in methods
     }
 
+    # Sur Apple Silicon, il est plus sûr de charger le modèle AVANT FAISS.
+    # On garde aussi ces phases hors de la barre globale pour éviter
+    # tout conflit d'affichage avec la progression "RIR eval".
+    no_rir_indexes: dict[str, tuple] = {}
+    failed_methods: set[str] = set()
     for method in methods:
-        collection_key = _cfg.get_collection_key(method)
-        print(f"\n[{method.upper()}] Construction de l'index sans RIR…")
-
-        # Construire l'index no-RIR UNE seule fois par méthode
+        console.print(f"\n[{method.upper()}] Préchargement du modèle…")
         try:
-            no_rir_index = _load_no_rir_index(collection_key)
+            _preload_embedding_model(method)
         except Exception as e:
-            print(f"  ⚠  Impossible de construire l'index sans RIR : {e}")
+            console.print(f"  ⚠  Impossible de préparer le modèle : {e}")
+            failed_methods.add(method)
+
+    from src.evaluation.rir_impact import rir_impact_scores, load_no_rir_index_cached
+
+    for method in methods:
+        if method in failed_methods:
             continue
+        collection_key = _cfg.get_collection_key(method)
+        console.print(f"[{method.upper()}] Préparation de l'index sans RIR…")
+        try:
+            no_rir_indexes[method] = load_no_rir_index_cached(collection_key)
+            _release_eval_memory()
+        except Exception as e:
+            console.print(f"  ⚠  Impossible de préparer l'index sans RIR : {e}")
+            failed_methods.add(method)
 
-        for entry in manifest:
-            filename   = entry["filename"]
-            track_id   = entry["track_id"]
-            artist     = entry.get("artist", "")
-            title      = entry.get("title", "")
-            audio_path = raw_dir / filename
+    total_tests = len(methods) * len(manifest) * len(conditions)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        TextColumn("{task.fields[current]}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task(
+            "RIR eval",
+            total=total_tests,
+            current="waiting...",
+        )
 
-            print(f"\n  [{artist} — {title}]")
+        for method in methods:
+            if method in failed_methods:
+                progress.advance(task_id, len(manifest) * len(conditions))
+                continue
 
-            for condition in conditions:
-                label    = CONDITION_LABELS.get(condition, condition)
-                waveform_base, base_sr = librosa.load(str(audio_path), sr=22050, mono=True)
-                degraded = _apply_condition(waveform_base, base_sr, condition)
+            no_rir_index = no_rir_indexes[method]
 
-                tmp_path = None
-                try:
-                    tmp_path = save_temp_wav(degraded, base_sr)
-                    res = rir_impact_scores(
-                        audio_path=tmp_path,
-                        track_id=track_id,
-                        method=method,
-                        prebuilt_no_rir=no_rir_index,
-                    )
-                except Exception as e:
-                    print(f"    ⚠  {label}: {e}")
-                    continue
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+            for entry in manifest:
+                filename   = entry["filename"]
+                track_id   = entry["track_id"]
+                artist     = entry.get("artist", "")
+                title      = entry.get("title", "")
+                audio_path = raw_dir / filename
 
-                row = {
-                    "track_id":    track_id,
-                    "filename":    filename,
-                    "artist":      artist,
-                    "title":       title,
-                    "duration_s":  entry.get("duration_s"),
-                    **res["with_rir"],
-                }
-                per_method[method][condition]["with_rir"].append(row)
+                for condition in conditions:
+                    progress.update(task_id, current=_rir_progress_label(entry, method, condition))
+                    label     = CONDITION_LABELS.get(condition, condition)
+                    cache_key = _rir_row_cache_key(method, condition, entry)
+                    cached    = resume_cache.get(cache_key)
 
-                row_no = {
-                    "track_id":    track_id,
-                    "filename":    filename,
-                    "artist":      artist,
-                    "title":       title,
-                    "duration_s":  entry.get("duration_s"),
-                    **res["without_rir"],
-                }
-                per_method[method][condition]["without_rir"].append(row_no)
+                    if cached is not None:
+                        row = dict(cached["with_rir"])
+                        row_no = dict(cached["without_rir"])
+                    else:
+                        waveform_base, base_sr = librosa.load(str(audio_path), sr=22050, mono=True)
+                        degraded = _apply_condition(waveform_base, base_sr, condition)
 
-                rw = res["with_rir"]["rank"]
-                rn = res["without_rir"]["rank"]
-                rw_s = f"#{rw}" if rw else "NF"
-                rn_s = f"#{rn}" if rn else "NF"
-                delta = (rn - rw) if (rw and rn) else None
-                ok = ("↑ +" + str(delta) if delta and delta > 0
-                      else ("→ =" if delta == 0 else ("↓ " + str(delta) if delta else "?")))
-                print(f"    {label:25s}  sans={rn_s:>4}  avec={rw_s:>4}  {ok}")
+                        tmp_path = None
+                        try:
+                            tmp_path = save_temp_wav(degraded, base_sr)
+                            res = rir_impact_scores(
+                                audio_path=tmp_path,
+                                track_id=track_id,
+                                method=method,
+                                prebuilt_no_rir=no_rir_index,
+                            )
+                        except Exception as e:
+                            console.print(f"    ⚠  {artist} — {title} | {label}: {e}")
+                            progress.advance(task_id)
+                            continue
+                        finally:
+                            if tmp_path and os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
+
+                        row = {
+                            "track_id":    track_id,
+                            "filename":    filename,
+                            "artist":      artist,
+                            "title":       title,
+                            "duration_s":  entry.get("duration_s"),
+                            "position":    entry.get("position"),
+                            **res["with_rir"],
+                        }
+                        row_no = {
+                            "track_id":    track_id,
+                            "filename":    filename,
+                            "artist":      artist,
+                            "title":       title,
+                            "duration_s":  entry.get("duration_s"),
+                            "position":    entry.get("position"),
+                            **res["without_rir"],
+                        }
+                        cache_row = {
+                            "_cache_key": cache_key,
+                            "method": method,
+                            "condition": condition,
+                            "with_rir": row,
+                            "without_rir": row_no,
+                        }
+                        _append_jsonl_cache(cache_path, cache_row)
+                        resume_cache[cache_key] = cache_row
+                        _release_eval_memory()
+
+                    per_method[method][condition]["with_rir"].append(row)
+                    per_method[method][condition]["without_rir"].append(row_no)
+                    progress.advance(task_id)
 
     # ── Agrégation ──
     agg: dict = {}
@@ -570,8 +789,9 @@ def run_rir_evaluate(
         "n_tracks":   len(manifest),
         "results":    agg,
     }
-    ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_path = out_dir / f"rir_eval_{ts}.json"
+    for old_path in out_dir.glob("rir_eval_*.json"):
+        old_path.unlink(missing_ok=True)
+    json_path = out_dir / "rir_eval.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(out_data, f, ensure_ascii=False, indent=2)
     print(f"\n  JSON → {json_path}")
