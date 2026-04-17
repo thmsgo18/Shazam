@@ -3,7 +3,6 @@ src/index/build_index.py
 
 Construction and management of the FAISS index.
 Also supports HNSW and IVF.
-Responsible: Person A
 """
 
 from __future__ import annotations

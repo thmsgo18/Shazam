@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src import config
+from src.utils.metadata import atomic_write_parquet
 
 ROOT    = Path(__file__).resolve().parents[2]
 console = Console()
@@ -197,9 +197,7 @@ def run_clean_track(track_id: str, yes: bool = False) -> None:
     if df is not None and not df[df["track_id"] == track_id].empty:
         try:
             df_new = df[df["track_id"] != track_id]
-            tmp = metadata_path.with_suffix(".tmp.parquet")
-            df_new.to_parquet(tmp, index=False)
-            tmp.replace(metadata_path)
+            atomic_write_parquet(metadata_path, df_new)
             console.print(f"  [green]✓ Metadata[/green] — row deleted")
         except Exception as exc:
             console.print(f"  [red]✗ Metadata — error: {exc}[/red]")

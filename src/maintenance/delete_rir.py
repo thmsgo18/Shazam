@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import click
 import chromadb
 import pandas as pd
 from rich.console import Console
@@ -153,7 +154,6 @@ def run_delete_rir(
         dry_run: simulates the operation without deleting anything.
         yes:     confirms without asking.
     """
-    import click
 
     collection_key = config.get_collection_key(method)
     meta_path      = ROOT / config.METADATA_PATH

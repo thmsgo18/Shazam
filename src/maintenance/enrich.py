@@ -51,9 +51,10 @@ def _clean_artist(artist: str) -> str:
 
 
 def _clean_title(title: str) -> str:
+    original = title
     title = re.sub(r"\(.*?\)", "", title).strip()
     title = re.sub(r"\s*(feat\.|ft\.)\s+.*", "", title, flags=re.IGNORECASE).strip()
-    return title or title
+    return title or original
 
 
 # ---------------------------------------------------------------------------

@@ -117,13 +117,13 @@ def apply_bandpass(waveform: np.ndarray, sr: int, low_hz: float = 300, high_hz: 
 
 def simulate_opus_codec(waveform: np.ndarray, sr: int, bitrate: int = 32000) -> np.ndarray:
     """Simulates the degradation of the Opus codec via encoding/decoding."""
+    import subprocess
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_in:
+        sf.write(f_in.name, waveform, sr)
+        in_path = f_in.name
+    out_opus = in_path.replace(".wav", ".opus")
+    out_wav  = in_path.replace(".wav", "_decoded.wav")
     try:
-        import subprocess
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_in:
-            sf.write(f_in.name, waveform, sr)
-            in_path = f_in.name
-        out_opus = in_path.replace(".wav", ".opus")
-        out_wav  = in_path.replace(".wav", "_decoded.wav")
         subprocess.run(
             ["ffmpeg", "-y", "-i", in_path, "-c:a", "libopus", "-b:a", str(bitrate), out_opus],
             capture_output=True,
@@ -133,12 +133,15 @@ def simulate_opus_codec(waveform: np.ndarray, sr: int, bitrate: int = 32000) -> 
             capture_output=True,
         )
         result, _ = librosa.load(out_wav, sr=sr, mono=True)
-        os.unlink(in_path)
-        os.unlink(out_opus)
-        os.unlink(out_wav)
         return result.astype(np.float32)
     except Exception:
         return waveform
+    finally:
+        for p in (in_path, out_opus, out_wav):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 def save_temp_wav(waveform: np.ndarray, sr: int) -> str:

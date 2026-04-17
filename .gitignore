@@ -67,6 +67,7 @@ webapp/frontend/dist/
 # ─── IDE et OS ───────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 .DS_Store

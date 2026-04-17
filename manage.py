@@ -568,7 +568,7 @@ def download_test(query: tuple[str, ...], duration: str | None, position: str) -
     downloaded_file = files[0]
     click.echo(f"\n  Downloaded file: {downloaded_file.name}")
 
-    # Mise à jour du manifest (ground truth pour eval)
+    # Update the manifest (ground truth for eval)
     try:
         import pandas as pd
         from src.evaluation.evaluate import find_track_id_by_query

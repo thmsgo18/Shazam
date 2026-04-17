@@ -223,7 +223,9 @@ def _get_batch_size(method: str) -> int:
 def _get_load_sr(method: str) -> int:
     if method == "clap":
         return config.CLAP_SAMPLE_RATE
-    if method in ("muq", "mert"):
+    if method == "muq":
+        return config.MUQ_SAMPLE_RATE
+    if method == "mert":
         return config.MERT_SAMPLE_RATE
     return config.SAMPLE_RATE
 

@@ -127,20 +127,3 @@ def fingerprint_similarity(fp_query: set[tuple], fp_candidate: set[tuple]) -> fl
 
     # Score = number of matches at the best offset / query size
     return max(offsets.values()) / len(fp_query)
-
-
-
-################# TESTS #################
-'''
-if __name__ == "__main__":
-    
-    sr = 22050
-    dummy_waveform = np.random.randn(sr * 3).astype(np.float32) # 3 secondes
-    
-    fp = extract_fingerprint(dummy_waveform, sr)
-    print(f"Number of hashes generated: {len(fp)}")
-    
-    # Test of similarity
-    score = fingerprint_similarity(fp, fp)
-    print(f"Similarity on the same clip (expected 1.0) : {score}")
-'''

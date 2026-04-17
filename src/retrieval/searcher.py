@@ -2,7 +2,6 @@
 src/retrieval/searcher.py
 
 Loading the FAISS index and search functions.
-Owner: Person C
 """
 
 from __future__ import annotations
