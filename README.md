@@ -22,6 +22,8 @@ A music recognition system inspired by Shazam, developed as part of a Big Data p
 
 The approach combines the power of deep learning embeddings (FAISS vector search) with spectral fingerprinting inspired by the original Shazam patent, forming a hybrid two-stage pipeline that remains robust against noise, reverberation, and short audio clips.
 
+![Project demo](./video-presentation.gif)
+
 ---
 
 ## Table of Contents
