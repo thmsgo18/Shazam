@@ -16,7 +16,7 @@
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 ![CLAP](https://img.shields.io/badge/CLAP-laion-green)
 ![MuQ](https://img.shields.io/badge/MuQ-OpenMuQ-blueviolet)
-![License](https://img.shields.io/badge/License-Master_IAD_S2-lightgrey)
+![License](https://img.shields.io/badge/License-Master_IAD-lightgrey)
 
 A music recognition system inspired by Shazam, developed as part of a Big Data project (Master IAD, S2). Given an audio clip captured from a microphone or uploaded as a file, the system identifies the matching track from a database of several hundred titles and displays streaming links.
 
