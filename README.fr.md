@@ -22,14 +22,13 @@ Système de reconnaissance musicale inspiré de Shazam, développé dans le cadr
 
 L'approche combine la puissance des embeddings de deep learning (recherche vectorielle FAISS) avec le fingerprinting spectral inspiré du brevet Shazam original, formant un pipeline hybride en deux étapes qui reste robuste face au bruit, à la réverbération et aux extraits courts.
 
-![Demonstration du projet](./video-presentation-readme.gif)
-
 ---
 
 ## Table des matières
 
 - [Shazam](#shazam)
   - [Table des matières](#table-des-matières)
+  - [Presentation video](#presentation-video)
   - [Comment ça marche](#comment-ça-marche)
     - [Fonctionnement du fingerprinting](#fonctionnement-du-fingerprinting)
   - [Architecture du projet](#architecture-du-projet)
@@ -63,6 +62,14 @@ L'approche combine la puissance des embeddings de deep learning (recherche vecto
   - [Améliorations possibles](#améliorations-possibles)
   - [Références](#références)
   - [Auteur](#auteur)
+
+---
+
+## Presentation video
+
+<div align="center">
+  <img src="./video-presentation-readme.gif" alt="Demonstration du projet" width="900">
+</div>
 
 ---
 
