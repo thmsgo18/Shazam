@@ -45,7 +45,7 @@ The approach combines the power of deep learning embeddings (FAISS vector search
 - [Technologies](#technologies)
 - [Future Improvements](#future-improvements)
 - [References](#references)
-- [Team](#team)
+- [Author](#author)
 
 ---
 
@@ -664,13 +664,9 @@ Reference papers that guided technical decisions are available in the `research_
 
 ---
 
-## Team
+## Author
 
-Project completed as part of the Master in Artificial Intelligence and Data Science (IAD), Semester 2 — Big Data track.
+[Thomas Gourmelen](https://github.com/thmsgo18)
 
-| Student | GitHub |
-|---------|--------|
-| AIT MOKHTAR Clara | [@claraait123](https://github.com/claraait123) |
-| AYDIN Maria | [@Mmajora53](https://github.com/Mmajora53) |
-| GOURMELEN Thomas | [@thmsgo18](https://github.com/thmsgo18) |
-| TAN Vincent | [@20centan](https://github.com/20centan) |
+Occasional participation:
+[Clara Ait Mokhtar](https://github.com/claraait123), [Maria Aydin](https://github.com/Mmajora53), [Vincent Tan](https://github.com/20centan)

@@ -60,7 +60,7 @@ L'approche combine la puissance des embeddings de deep learning (recherche vecto
   - [Technologies](#technologies)
   - [Améliorations possibles](#améliorations-possibles)
   - [Références](#références)
-  - [Équipe](#équipe)
+  - [Auteur](#auteur)
 
 ---
 
@@ -675,13 +675,9 @@ Les articles de référence ayant guidé les choix techniques sont disponibles d
 
 ---
 
-## Équipe
+## Auteur
 
-Projet réalisé dans le cadre du Master Intelligence Artificielle et Data Science (IAD), Semestre 2 — parcours Big Data.
+[Thomas Gourmelen](https://github.com/thmsgo18)
 
-| Étudiant | GitHub |
-|----------|--------|
-| AIT MOKHTAR Clara | [@claraait123](https://github.com/claraait123) |
-| AYDIN Maria | [@Mmajora53](https://github.com/Mmajora53) |
-| GOURMELEN Thomas | [@thmsgo18](https://github.com/thmsgo18) |
-| TAN Vincent | [@20centan](https://github.com/20centan) |
+Participation ponctuelle :
+[Clara Ait Mokhtar](https://github.com/claraait123), [Maria Aydin](https://github.com/Mmajora53) et [Vincent Tan](https://github.com/20centan)
