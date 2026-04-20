@@ -91,7 +91,7 @@ def _load_clap(model_name: str, device: str | None = None, local_files_only: boo
     dtype = torch.float16 if (config.OPT_FLOAT16 and device == "cuda") else torch.float32
     model = ClapModel.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
         local_files_only=local_files_only,
     ).to(device)
     model.eval()                                                # Set the model to evaluation mode.
@@ -130,7 +130,7 @@ def clap_embedding(waveform: np.ndarray, sr: int, model_name: str, normalize: bo
         waveform = librosa.resample(waveform, orig_sr=sr, target_sr=target_sr)
         sr = target_sr
 
-    inputs = processor(audios=[waveform], sampling_rate=sr, return_tensors="pt") # Convert raw waveform into model-ready tensors with the CLAP processor.
+    inputs = processor(audio=[waveform], sampling_rate=sr, return_tensors="pt") # Convert raw waveform into model-ready tensors with the CLAP processor.
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad(): # Disable gradient computation for faster inference and lower memory usage
@@ -174,7 +174,7 @@ def clap_batch_embeddings(
             y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
         resampled.append(y)
 
-    inputs = processor(audios=resampled, sampling_rate=target_sr, return_tensors="pt", padding=True)
+    inputs = processor(audio=resampled, sampling_rate=target_sr, return_tensors="pt", padding=True)
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
@@ -394,7 +394,7 @@ def _load_mert(model_name: str, device: str | None = None, local_files_only: boo
     model = AutoModel.from_pretrained(
         model_name,
         trust_remote_code=True,
-        torch_dtype=dtype,
+        dtype=dtype,
         local_files_only=local_files_only,
     ).to(device)
     model.eval()
