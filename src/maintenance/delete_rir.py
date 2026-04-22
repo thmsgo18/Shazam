@@ -42,34 +42,19 @@ BATCH_DELETE = 500
 # ---------------------------------------------------------------------------
 
 def _scan_rir_ids(collection) -> list[str]:
-    """Returns all RIR IDs present in the collection."""
-    PAGE   = 1000
-    offset = 0
-    rir_ids: list[str] = []
+    """Returns all RIR IDs present in the collection.
 
-    with Progress(
-        SpinnerColumn(),
-        "[progress.description]{task.description}",
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
-    ) as prog:
-        task = prog.add_task("Scanning ChromaDB…", total=None)
-        while True:
-            page = collection.get(limit=PAGE, offset=offset, include=[])
-            ids  = page["ids"]
-            if not ids:
-                break
-            for id_ in ids:
-                if "_rir_" in id_:
-                    rir_ids.append(id_)
-            prog.advance(task, len(ids))
-            if len(ids) < PAGE:
-                break
-            offset += PAGE
+    Fetches all IDs in a single query (O(N)) instead of paginating with
+    LIMIT/OFFSET which is O(N²) due to SQLite's offset scan behaviour.
+    """
+    n = collection.count()
+    if n == 0:
+        return []
 
+    console.print(f"[dim]Fetching {n:,} IDs in a single pass…[/dim]")
+    page    = collection.get(limit=n, offset=0, include=[])
+    rir_ids = [id_ for id_ in page["ids"] if "_rir_" in id_]
+    console.print(f"[dim]→ {len(rir_ids):,} RIR segment(s) identified[/dim]")
     return rir_ids
 
 
@@ -109,17 +94,15 @@ def _clear_metadata(meta_path: Path, collection_key: str, dry_run: bool) -> int:
     if "rir_augmented" not in df.columns:
         return 0
 
-    updated = 0
-    for i, row in df.iterrows():
-        val = row["rir_augmented"]
-        if not isinstance(val, dict):
-            continue
-        if collection_key not in val:
-            continue
-        if not dry_run:
-            new_val = {k: v for k, v in val.items() if k != collection_key}
-            df.at[i, "rir_augmented"] = new_val if new_val else None
-        updated += 1
+    mask    = df["rir_augmented"].apply(
+        lambda x: isinstance(x, dict) and collection_key in x
+    )
+    updated = int(mask.sum())
+
+    if not dry_run and updated > 0:
+        df.loc[mask, "rir_augmented"] = df.loc[mask, "rir_augmented"].apply(
+            lambda x: ({k: v for k, v in x.items() if k != collection_key} or None)
+        )
 
     if not dry_run and updated > 0:
         col       = df["rir_augmented"]

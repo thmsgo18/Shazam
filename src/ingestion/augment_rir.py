@@ -127,6 +127,24 @@ def _estimate_rt60(rir: np.ndarray, sr: int) -> float:
     return indices[0] / sr
 
 
+def _select_diverse_mit_rir_paths(
+    candidates: list[tuple[Path, float]],
+    n: int,
+) -> list[tuple[Path, float]]:
+    """Selects N RIR paths to maximize RT60 diversity — no audio loaded yet."""
+    sorted_c = sorted(candidates, key=lambda x: x[1])
+    if n >= len(sorted_c):
+        return sorted_c
+    indices  = np.linspace(0, len(sorted_c) - 1, n, dtype=int)
+    selected = [sorted_c[i] for i in indices]
+    console.print(
+        f"[green]{len(candidates)} MIT RIRs available → "
+        f"{n} selected by RT60 diversity "
+        f"({selected[0][1]:.2f}s … {selected[-1][1]:.2f}s)[/green]"
+    )
+    return selected
+
+
 def _select_diverse_mit_rirs(
     candidates: list[tuple[str, np.ndarray, float]],
     n: int,
@@ -178,16 +196,32 @@ def _load_rirs(rir_dir: Path, n: int, sr: int, source: str = "synthetic") -> lis
             )
         else:
             console.print(f"[cyan]{len(wavs)} MIT WAV file(s) found in {rir_dir}[/cyan]")
-            candidates: list[tuple[str, np.ndarray, float]] = []
+
+            # First pass: estimate RT60 for all files, discard audio immediately.
+            # This keeps only N waveforms in RAM instead of all 274.
+            rt60_list: list[tuple[Path, float]] = []
             for wav in wavs:
                 try:
                     y, _ = librosa.load(str(wav), sr=sr, mono=True)
                     rt60  = _estimate_rt60(y, sr)
-                    candidates.append((wav.stem, y, rt60))
+                    rt60_list.append((wav, rt60))
+                    del y
                 except Exception as exc:
                     console.print(f"[yellow]⚠ Unable to load {wav.name}: {exc}[/yellow]")
-            if candidates:
-                return _select_diverse_mit_rirs(candidates, n)
+
+            if rt60_list:
+                selected_paths = _select_diverse_mit_rir_paths(rt60_list, n)
+                # Second pass: load only the N selected files
+                result: list[tuple[str, np.ndarray]] = []
+                for wav_path, _ in selected_paths:
+                    try:
+                        y, _ = librosa.load(str(wav_path), sr=sr, mono=True)
+                        result.append((wav_path.stem, y))
+                    except Exception as exc:
+                        console.print(f"[yellow]⚠ Failed to load {wav_path.name}: {exc}[/yellow]")
+                if result:
+                    return result
+
             console.print("[yellow]⚠ No valid MIT RIR — switching to synthetics.[/yellow]")
 
     # source="synthetic" or fallback
@@ -299,17 +333,20 @@ def _backfill_rir_done(
     if "rir_augmented" not in df.columns:
         df["rir_augmented"] = [{} for _ in range(len(df))]
 
+    # O(1) lookup instead of O(N) scan per track
+    track_idx_map = {tid: i for i, tid in enumerate(df["track_id"])}
+
     updated = 0
-    for i, row in df.iterrows():
-        tid = row["track_id"]
-        if tid not in rir_map:
+    for tid, rirs in rir_map.items():
+        if tid not in track_idx_map:
             continue
-        current  = row["rir_augmented"]
+        i        = track_idx_map[tid]
+        current  = df.at[i, "rir_augmented"]
         if not isinstance(current, dict) or current is None:
             current = {}
         existing = current.get(collection_key)
         done_set = set(existing) if existing is not None and hasattr(existing, "__iter__") else set()
-        done_set.update(rir_map[tid])
+        done_set.update(rirs)
         current[collection_key] = sorted(done_set)
         df.at[i, "rir_augmented"] = current
         updated += 1
@@ -347,10 +384,15 @@ def _mark_rir_done(
     collection_key: str,
     rir_name: str,
     lock: threading.Lock,
+    df_cache: dict,
 ) -> None:
-    """Adds rir_name to rir_augmented[collection_key] for this track_id (atomic)."""
+    """Adds rir_name to rir_augmented[collection_key] for this track_id (atomic).
+
+    df_cache must be {"df": <full metadata DataFrame>} — the DataFrame is updated
+    in-place and written to disk without reloading it from disk each call.
+    """
     with lock:
-        df = pd.read_parquet(meta_path)
+        df = df_cache["df"]
         if "rir_augmented" not in df.columns:
             df["rir_augmented"] = [{} for _ in range(len(df))]
 
@@ -509,11 +551,17 @@ def run_augment(
     )
     if needs_backfill:
         _backfill_rir_done(meta_path, collection, collection_key)
-        df_all = pd.read_parquet(meta_path)
+        df_meta = pd.read_parquet(meta_path)
         if tracks == "flowers":
-            df_all = df_all[df_all["track_id"] == FLOWERS_ID]
+            df_all = df_meta[df_meta["track_id"] == FLOWERS_ID]
         elif tracks != "all":
-            df_all = df_all[df_all["track_id"] == tracks]
+            df_all = df_meta[df_meta["track_id"] == tracks]
+        else:
+            df_all = df_meta
+
+    # Single in-memory copy of the full metadata DataFrame — updated by _mark_rir_done
+    # without reloading from disk on every (track, RIR) pair.
+    meta_cache = {"df": df_meta}
 
     rir_names_requested = {name for name, _ in rirs}
     rir_done_map        = _load_rir_done(df_all, collection_key)
@@ -622,9 +670,9 @@ def run_augment(
                 ))
                 return rir_name, segs
 
-            n_conv = min(len(rirs_todo), 4)
-            with ThreadPoolExecutor(max_workers=n_conv) as pool:
-                degraded = list(pool.map(_conv_one, rirs_todo))
+            # Sequential convolution: fftconvolve is fast and the bottleneck is RAM,
+            # not CPU. Holding 4 full segment lists simultaneously multiplied peak RAM by 4.
+            degraded = [_conv_one(args) for args in rirs_todo]
 
             conv_q.put((row, degraded, None, done_for_track))
 
@@ -689,26 +737,29 @@ def run_augment(
                     visible=True,
                 )
 
-                ids_batch, emb_batch, meta_batch = [], [], []
+                # Write to ChromaDB per batch — avoids accumulating all segment
+                # embeddings for an entire RIR before the first write.
+                n_added_this_rir = 0
                 for i in range(0, len(segs), batch_size):
                     batch     = segs[i: i + batch_size]
                     seg_waves = [seg for _, seg in batch]
                     embs      = _batch_embed(seg_waves, load_sr, method)
-                    for j, (start_s, _) in enumerate(batch):
-                        seg_id = f"{track_id}_rir_{rir_name}_{i + j}"
-                        ids_batch.append(seg_id)
-                        emb_batch.append(embs[j].tolist())
-                        meta_batch.append({"track_id": track_id, "start_s": float(start_s)})
-
-                if ids_batch:
+                    sub_ids   = [f"{track_id}_rir_{rir_name}_{i + j}" for j in range(len(batch))]
+                    sub_metas = [
+                        {"track_id": track_id, "start_s": float(start_s)}
+                        for start_s, _ in batch
+                    ]
                     collection.add(
-                        ids=ids_batch,
-                        embeddings=emb_batch,
-                        metadatas=meta_batch,
-                        documents=[""] * len(ids_batch),
+                        ids=sub_ids,
+                        embeddings=embs.tolist(),
+                        metadatas=sub_metas,
+                        documents=[""] * len(sub_ids),
                     )
-                    n_added += len(ids_batch)
-                    _mark_rir_done(meta_path, track_id, collection_key, rir_name, meta_lock)
+                    n_added_this_rir += len(sub_ids)
+
+                if n_added_this_rir > 0:
+                    n_added += n_added_this_rir
+                    _mark_rir_done(meta_path, track_id, collection_key, rir_name, meta_lock, meta_cache)
 
             done += 1
             progress.update(task_tracks, completed=done)

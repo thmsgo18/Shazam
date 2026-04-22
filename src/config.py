@@ -49,7 +49,14 @@ VECTOR_TOP_K_SEGMENTS = 200   # Number of candidate segments retrieved from FAIS
 VECTOR_TOP_N_TRACKS   = 50    # Number of unique tracks that pass to Stage 2 (fingerprinting)
 VECTOR_TOP_N_RESULTS  = 10    # Number of final results returned to the interface
 
-INDEX_TYPE = "flat" # Options are: "flat", "hnsw", "ivf"
+INDEX_TYPE  = "flat"  # Options: "flat" | "hnsw" | "ivf" | "ivfsq"
+# "flat"  — exact cosine, 2 GB RAM for 1 M×512-dim. Best accuracy.
+# "hnsw"  — approximate, same RAM as flat, faster search.
+# "ivf"   — approximate, same RAM as flat, faster search (set IVF_NPROBE).
+# "ivfsq" — approximate, ~4× less RAM & disk (0.5 GB for 1 M×512-dim).
+#            Recommended when memory is constrained; accuracy loss is
+#            negligible when fingerprint re-ranking (Stage 2) is active.
+IVF_NPROBE  = 50    # Cells probed per query for IVF/IVF+SQ8 (higher → more accurate, slower)
 
 # Embedding
 EMBEDDING_METHOD = "clap"                                   # "mfcc" or "clap" or "muq" or "mert"

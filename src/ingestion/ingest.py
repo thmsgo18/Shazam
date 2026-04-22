@@ -255,21 +255,23 @@ def _save_track(
     collection,
     fp_db: Path,
     meta_path: Path,
+    meta_cache: dict,
 ) -> None:
     """
     Saves a track to ChromaDB + SQLite + metadata.parquet.
+
+    meta_cache must be {"df": <full metadata DataFrame>, "ids": set[track_id]}.
+    The DataFrame is kept in memory across calls — no parquet re-read per track.
 
     In case of a previous partial crash (track_id already present), old
     segments are deleted and rewritten cleanly — no duplicates ever.
     """
     new_emb = np.vstack(track_embeddings).astype(np.float32)
 
-
     # Delete old segments if partial crash occurred
     existing = collection.get(where={"track_id": {"$eq": track_id}})
     if existing["ids"]:
         collection.delete(ids=existing["ids"])
-
 
     collection.add(
         embeddings=new_emb.tolist(),
@@ -280,27 +282,26 @@ def _save_track(
         ],
     )
 
-
     if new_fp_hashes is not None:
         fp_save(fp_db, track_id, new_fp_hashes)
 
-
-    if meta_path.exists():
-        df_meta = pd.read_parquet(meta_path)
-        if track_id in set(df_meta["track_id"]):
-            idx = df_meta.index[df_meta["track_id"] == track_id][0]
-            current = df_meta.at[idx, "embedded_methods"]
-            current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
-            method_key = get_method_key(method)
-            if method_key not in current:
-                df_meta.at[idx, "embedded_methods"] = current + [method_key]
-        else:
-            df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
+    # Update the in-memory DataFrame — no disk read on each track
+    df_meta = meta_cache["df"]
+    if track_id in meta_cache["ids"]:
+        # Re-ingestion: update embedded_methods on the existing row
+        idx     = df_meta.index[df_meta["track_id"] == track_id][0]
+        current = df_meta.at[idx, "embedded_methods"]
+        current = list(current) if hasattr(current, "__iter__") and not isinstance(current, str) else []
+        method_key = get_method_key(method)
+        if method_key not in current:
+            df_meta.at[idx, "embedded_methods"] = current + [method_key]
     else:
-        df_meta = pd.DataFrame([metadata_row])
+        # New track: append row and register in the id set
+        df_meta = pd.concat([df_meta, pd.DataFrame([metadata_row])], ignore_index=True)
+        meta_cache["df"] = df_meta
+        meta_cache["ids"].add(track_id)
 
-
-    atomic_write_parquet(meta_path, df_meta)
+    atomic_write_parquet(meta_path, meta_cache["df"])
 
 
 
@@ -346,6 +347,14 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
 
     fp_init(fp_db)
     existing_fp_ids: set[str] = fp_load_ids(fp_db)
+
+    # Load metadata once — updated in-memory, written to disk after each track.
+    # Avoids O(N) parquet reads/writes for N tracks (was one full round-trip per track).
+    if meta_path.exists():
+        _df_init   = pd.read_parquet(meta_path)
+        meta_cache = {"df": _df_init, "ids": set(_df_init["track_id"])}
+    else:
+        meta_cache = {"df": pd.DataFrame(), "ids": set()}
 
 
     collection_key = config.get_collection_key(method)
@@ -590,6 +599,7 @@ def process_in_ram(tracks: list[dict], csv_sources: list[str]) -> None:
                             track_embeddings, track_segments,
                             new_fp_hashes, metadata_row,
                             collection, fp_db, meta_path,
+                            meta_cache,
                         )
                         saved_count += 1
 

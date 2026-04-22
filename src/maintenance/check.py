@@ -193,9 +193,11 @@ def check_method(method: str) -> list[Warning]:
         ))
         return warns
     
-    # Load all embeddings + metadata once (reused across all checks)
+    # Load embeddings + metadata. Embeddings are only needed for C1/C2 checks,
+    # so the list-of-lists and the numpy array are freed as soon as those checks pass.
     all_data = _chroma_get_all(collection, include=["embeddings", "metadatas"])
     emb      = np.array(all_data["embeddings"], dtype=np.float32)
+    del all_data["embeddings"]  # free list-of-lists immediately after conversion
 
    # --- [C1] Embedding dimension ---
     if emb.ndim != 2:
@@ -229,6 +231,8 @@ def check_method(method: str) -> list[Warning]:
             metrics={"Corrupted vectors": f"{n_bad} / {len(emb)}"},
             action="Identify affected tracks and re-download them",
         ))
+
+    del emb  # no longer needed after C1/C2
 
     # --- [C3] ChromaDB ↔ order parquet (if index was built) ---
     if order_path.exists():
@@ -296,6 +300,12 @@ def check_method(method: str) -> list[Warning]:
         ))
         return warns
 
+    # Build O(1) index: avoids repeated O(N) full-scan inside every check loop
+    df_meta_idx  = df_meta.drop_duplicates("track_id").set_index("track_id")
+    has_duration = "duration" in df_meta.columns
+    has_artist   = "artist"   in df_meta.columns
+    has_title    = "title"    in df_meta.columns
+
     # Build mapping track_id → segment count from ChromaDB
     chroma_track_seg_counts: dict[str, int] = {}
     for m in all_data["metadatas"]:
@@ -323,22 +333,22 @@ def check_method(method: str) -> list[Warning]:
         ))
 
     # --- [C7] Incomplete embedding (< 80% of expected segments) ---
-    if "duration" in df_meta.columns:
+    if has_duration:
         win_s = config.SEGMENT_WIN_S
         hop_s = config.SEGMENT_HOP_S
         for tid, actual in chroma_track_seg_counts.items():
-            row = df_meta[df_meta["track_id"] == tid]
-            if row.empty or "duration" not in row.columns:
+            if tid not in df_meta_idx.index:
                 continue
-            duration = float(row["duration"].values[0])
+            row      = df_meta_idx.loc[tid]
+            duration = float(row["duration"])
             expected = int(max(0, (duration - win_s) / hop_s)) + 1
             if expected > 0 and actual / expected < 0.8:
                 warns.append(Warning(
                     level="CRITICAL", code="C7", label="Incomplete embedding",
                     method=method,
                     track_id=tid,
-                    artist=str(row["artist"].values[0]) if "artist" in row else None,
-                    title=str(row["title"].values[0])   if "title"  in row else None,
+                    artist=str(row["artist"]) if has_artist else None,
+                    title=str(row["title"])   if has_title  else None,
                     metrics={
                         "Actual / expected segments": f"{actual} / {expected}  ({actual/expected:.0%})",
                         "Track duration":             _fmt_dur(duration),
@@ -372,21 +382,21 @@ def check_method(method: str) -> list[Warning]:
     # --- [Q2] start_s > track duration ---
     # Tolerance of one segment window (SEGMENT_WIN_S) for yt-dlp / librosa discrepancies
     Q2_TOLERANCE_S = config.SEGMENT_WIN_S
-    if "duration" in df_meta.columns:
+    if has_duration:
         for m_meta in all_data["metadatas"]:
             tid     = m_meta["track_id"]
             start_s = m_meta["start_s"]
-            row     = df_meta[df_meta["track_id"] == tid]
-            if row.empty:
+            if tid not in df_meta_idx.index:
                 continue
-            duration = float(row["duration"].values[0])
+            row      = df_meta_idx.loc[tid]
+            duration = float(row["duration"])
             if start_s > duration + Q2_TOLERANCE_S:
                 warns.append(Warning(
                     level="QUALITY", code="Q2", label="Segment beyond track duration",
                     method=method,
                     track_id=tid,
-                    artist=str(row["artist"].values[0]) if "artist" in row else None,
-                    title=str(row["title"].values[0])   if "title"  in row else None,
+                    artist=str(row["artist"]) if has_artist else None,
+                    title=str(row["title"])   if has_title  else None,
                     metrics={
                         "start_s":        f"{start_s:.1f}s",
                         "Track duration": f"{duration:.1f}s",
@@ -405,14 +415,14 @@ def check_method(method: str) -> list[Warning]:
         )
         missing_segs = should_have - chroma_track_ids
         for tid in list(missing_segs)[:5]:
-            row = df_meta[df_meta["track_id"] == tid]
+            has_tid = tid in df_meta_idx.index
             warns.append(Warning(
                 level="CRITICAL", code="C6b",
                 label="Track marked as processed but has no segments",
                 method=method,
                 track_id=tid,
-                artist=str(row["artist"].values[0]) if not row.empty and "artist" in row else None,
-                title=str(row["title"].values[0])   if not row.empty and "title"  in row else None,
+                artist=str(df_meta_idx.loc[tid, "artist"]) if has_tid and has_artist else None,
+                title=str(df_meta_idx.loc[tid, "title"])   if has_tid and has_title  else None,
                 metrics={"track_id": tid[:16] + "..."},
                 action="Delete via `--purge` then run `python manage.py ingest`.",
             ))
@@ -422,13 +432,13 @@ def check_method(method: str) -> list[Warning]:
 
     # [Q3] Empty fingerprint (0 hashes)
     for tid in [t for t, n in fp_stats.items() if n == 0][:5]:
-        row = df_meta[df_meta["track_id"] == tid]
+        has_tid = tid in df_meta_idx.index
         warns.append(Warning(
             level="QUALITY", code="Q3", label="Empty fingerprint (0 hashes)",
             method=method,
             track_id=tid,
-            artist=str(row["artist"].values[0]) if not row.empty and "artist" in row else None,
-            title=str(row["title"].values[0])   if not row.empty and "title"  in row else None,
+            artist=str(df_meta_idx.loc[tid, "artist"]) if has_tid and has_artist else None,
+            title=str(df_meta_idx.loc[tid, "title"])   if has_tid and has_title  else None,
             metrics={"Hashes": "0"},
             action="Re-download if audio quality is suspect (--purge)",
         ))
@@ -452,17 +462,20 @@ def check_method(method: str) -> list[Warning]:
         ))
 
     # [Q4] Poor fingerprint outlier (IQR by duration bucket)
-    if "duration" in df_meta.columns:
+    if has_duration:
         rows = []
         for tid, n_hashes in fp_stats.items():
-            row = df_meta[df_meta["track_id"] == tid]
-            if row.empty or float(row["duration"].values[0]) == 0:
+            if tid not in df_meta_idx.index:
+                continue
+            row      = df_meta_idx.loc[tid]
+            duration = float(row["duration"])
+            if duration == 0:
                 continue
             rows.append({
                 "track_id": tid,
-                "artist":   str(row["artist"].values[0]) if "artist" in row else "",
-                "title":    str(row["title"].values[0])  if "title"  in row else "",
-                "duration": float(row["duration"].values[0]),
+                "artist":   str(row["artist"]) if has_artist else "",
+                "title":    str(row["title"])  if has_title  else "",
+                "duration": duration,
                 "n_hashes": n_hashes,
             })
 
@@ -522,8 +535,13 @@ class MethodSummary:
 
 def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
     """Collects summary stats for a method (fast)."""
-    fp_db      = ROOT / config.FINGERPRINTS_DB
-    index_path = ROOT / config.INDEX_DIR / f"index_{method}_{config.INDEX_TYPE}.faiss"
+    import pyarrow.parquet as pq
+
+    fp_db        = ROOT / config.FINGERPRINTS_DB
+    index_path   = ROOT / config.INDEX_DIR / f"index_{method}_{config.INDEX_TYPE}.faiss"
+    order_path   = ROOT / config.INDEX_DIR / f"segments_{method}.parquet"
+    df_meta_idx  = df_meta.drop_duplicates("track_id").set_index("track_id") if df_meta is not None else None
+    has_duration = df_meta is not None and "duration" in df_meta.columns
 
     collection, _ = _get_chroma_collection(method)
     if collection is None:
@@ -535,41 +553,52 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
 
     n_segments = collection.count()
 
-    # Count tracks and incomplete embeddings
-    n_tracks     = 0
-    n_incomplete = 0
-    all_data     = None
-    if n_segments > 0 and df_meta is not None and "duration" in df_meta.columns:
-        all_data = _chroma_get_all(collection, include=["metadatas"])
-        track_seg_counts: dict[str, int] = {}
-        for m in all_data["metadatas"]:
-            tid = m["track_id"]
-            track_seg_counts[tid] = track_seg_counts.get(tid, 0) + 1
-        n_tracks = len(track_seg_counts)
+    # Count tracks and incomplete embeddings.
+    # Fast path: read the segments parquet (columnar, one I/O) instead of
+    # paginating ChromaDB with LIMIT/OFFSET which is O(N²) in SQLite.
+    n_tracks          = 0
+    n_incomplete      = 0
+    chroma_ids: set[str] = set()
 
-        win_s = config.SEGMENT_WIN_S
-        hop_s = config.SEGMENT_HOP_S
-        for tid, actual in track_seg_counts.items():
-            row = df_meta[df_meta["track_id"] == tid]
-            if row.empty:
-                continue
-            duration = float(row["duration"].values[0])
-            expected = int(max(0, (duration - win_s) / hop_s)) + 1
-            if expected > 0 and actual / expected < 0.8:
-                n_incomplete += 1
-    elif n_segments > 0:
-        all_data = _chroma_get_all(collection, include=["metadatas"])
-        n_tracks = len(set(m["track_id"] for m in all_data["metadatas"]))
+    if n_segments > 0:
+        if order_path.exists():
+            try:
+                import pyarrow.compute as pc
+                # value_counts runs in C++ — avoids materialising 1M Python strings
+                vc     = pc.value_counts(
+                    pq.read_table(order_path, columns=["track_id"]).column("track_id")
+                )
+                track_seg_counts: dict[str, int] = dict(zip(
+                    vc.field("values").to_pylist(),
+                    vc.field("counts").to_pylist(),
+                ))
+                n_tracks   = len(track_seg_counts)
+                chroma_ids = set(track_seg_counts.keys())
+            except Exception:
+                track_seg_counts = {}
+        else:
+            # Fallback: no parquet yet (index not built) — use ChromaDB
+            all_data = _chroma_get_all(collection, include=["metadatas"])
+            track_seg_counts = {}
+            for m in all_data["metadatas"]:
+                tid = m["track_id"]
+                track_seg_counts[tid] = track_seg_counts.get(tid, 0) + 1
+            n_tracks   = len(track_seg_counts)
+            chroma_ids = set(track_seg_counts.keys())
+
+        if has_duration and track_seg_counts:
+            win_s = config.SEGMENT_WIN_S
+            hop_s = config.SEGMENT_HOP_S
+            for tid, actual in track_seg_counts.items():
+                if df_meta_idx is None or tid not in df_meta_idx.index:
+                    continue
+                duration = float(df_meta_idx.loc[tid, "duration"])
+                expected = int(max(0, (duration - win_s) / hop_s)) + 1
+                if expected > 0 and actual / expected < 0.8:
+                    n_incomplete += 1
 
     # Fingerprints
-    fp_stats   = _fp_load_stats(fp_db)
-    chroma_ids: set[str] = set()
-    if n_segments > 0 and all_data is not None:
-        chroma_ids = set(m["track_id"] for m in all_data["metadatas"])
-    elif n_segments > 0:
-        all_data2  = _chroma_get_all(collection, include=["metadatas"])
-        chroma_ids = set(m["track_id"] for m in all_data2["metadatas"])
-
+    fp_stats     = _fp_load_stats(fp_db)
     n_fp_total   = len(chroma_ids)
     n_fp_missing = len(chroma_ids - set(fp_stats.keys()))
     n_fp         = n_fp_total - n_fp_missing
@@ -577,15 +606,17 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
 
     # Q4 — poor fingerprints (fast count, no detail)
     n_fp_poor = 0
-    if df_meta is not None and "duration" in df_meta.columns:
+    if has_duration:
         rows = []
         for tid, n_hashes in fp_stats.items():
             if tid not in chroma_ids:
                 continue
-            row = df_meta[df_meta["track_id"] == tid]
-            if row.empty or float(row["duration"].values[0]) == 0:
+            if df_meta_idx is None or tid not in df_meta_idx.index:
                 continue
-            rows.append({"duration": float(row["duration"].values[0]), "n_hashes": n_hashes})
+            duration = float(df_meta_idx.loc[tid, "duration"])
+            if duration == 0:
+                continue
+            rows.append({"duration": duration, "n_hashes": n_hashes})
         if len(rows) >= 4:
             df_fp = pd.DataFrame(rows)
             df_fp["bin"] = pd.cut(
@@ -601,13 +632,18 @@ def _method_summary(method: str, df_meta: pd.DataFrame | None) -> MethodSummary:
                 lower = q1 - 2.5 * (q3 - q1)
                 n_fp_poor += int((grp["n_hashes"] < lower).sum())
 
-    # Check FAISS index
+    # FAISS index check: read only the parquet footer (num_rows) instead of
+    # loading the full index — avoids a 1-4 GB RAM spike per method.
     index_ok = False
     if index_path.exists():
         try:
-            import faiss
-            idx      = faiss.read_index(str(index_path))
-            index_ok = (idx.ntotal == n_segments)
+            if order_path.exists():
+                n_in_parquet = pq.read_metadata(order_path).num_rows
+                index_ok = (n_in_parquet == n_segments)
+            else:
+                import faiss
+                idx      = faiss.read_index(str(index_path))
+                index_ok = (idx.ntotal == n_segments)
         except Exception:
             index_ok = False
 
@@ -955,10 +991,7 @@ def _render_details(methods: list[str]) -> list[Warning]:
     for m in sorted(methods):
         collection, _ = _get_chroma_collection(m)
         n_seg    = collection.count() if collection else "—"
-        n_tracks = "—"
-        if collection and n_seg != "—" and n_seg > 0:
-            meta_data = _chroma_get_all(collection, include=["metadatas"])
-            n_tracks  = len(set(md["track_id"] for md in meta_data["metadatas"]))
+        n_tracks = "—"  # computed inside check_method; pre-fetching here would duplicate the query
 
         n_fp = _fp_count(ROOT / config.FINGERPRINTS_DB)
 
@@ -1059,6 +1092,7 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
 
     # --- Metadata : surgical removal of the method ---
     fully_removed: set[str] = set()
+    remaining_ids: set[str] = set()
 
     if meta_path.exists():
         df_meta  = pd.read_parquet(meta_path)
@@ -1093,12 +1127,9 @@ def purge_tracks(method: str, track_ids: set[str]) -> dict:
             df_meta                 = df_meta[~affected]
 
         atomic_write_parquet(meta_path, df_meta)
+        # Reuse the already-updated in-memory DataFrame instead of re-reading from disk
+        remaining_ids = set(df_meta["track_id"].unique())
 
-    # Tracks lacking metadata (C6 orphans) → also completely deleted
-    if meta_path.exists():
-        remaining_ids = set(pd.read_parquet(meta_path)["track_id"].unique())
-    else:
-        remaining_ids = set()
     fully_removed |= (track_ids - remaining_ids)
 
     # --- Fingerprints (SQLite) ---

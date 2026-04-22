@@ -58,6 +58,11 @@ def load_searcher(method: str, force_reload: bool = False) -> tuple[faiss.Index,
 
     index = faiss.read_index(str(index_path))
 
+    # For IVF-based indexes, set nprobe so recall stays high.
+    # Default nprobe=1 is too aggressive: only 1 cell searched out of √N.
+    if hasattr(index, "nprobe"):
+        index.nprobe = config.IVF_NPROBE
+
     # The order of segments is saved in INDEX_DIR by build_index.py
     # (rebuilt from ChromaDB at each build — always synchronized with the FAISS index)
     seg_path = index_dir / f"segments_{key}.parquet"
@@ -123,11 +128,14 @@ def aggregate_by_track(
     Returns:
         Sorted list [(track_id, total_score), ...] from best to worst.
     """
-    scores = {}
-    for idx, dist in zip(indices, distances):                       # zip pairs the items together
-        if idx == -1 :
-            continue
-        track_id = segments.iloc[idx]["track_id"]                   # Accesses a dataframe row given by idx
-        scores[track_id]= scores.get(track_id, 0.0) + float(dist)   # Accumulates the score. High score = very close song.
+    # Pre-extract as a numpy array once — direct O(1) index access vs pandas iloc overhead
+    track_ids = segments["track_id"].to_numpy()
 
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True) # Returns a list of tuples sorted in descending order.
+    scores: dict[str, float] = {}
+    for idx, dist in zip(indices, distances):
+        if idx == -1:
+            continue
+        track_id = track_ids[idx]
+        scores[track_id] = scores.get(track_id, 0.0) + float(dist)
+
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
