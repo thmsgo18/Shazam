@@ -68,7 +68,7 @@ L'approche combine la puissance des embeddings de deep learning (recherche vecto
 ## Presentation video
 
 <div align="center">
-  <img src="./video-presentation-readme.gif" alt="Demonstration du projet" width="900">
+  <a href="https://youtu.be/hohbve2WNwU?si=Qv1Tyfz8-z5lxg5e"><img src="./video-presentation-readme.gif" alt="Demonstration du projet" width="900"></a>
 </div>
 
 ---

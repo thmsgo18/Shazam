@@ -53,7 +53,7 @@ The approach combines the power of deep learning embeddings (FAISS vector search
 ## Video Presentation
 
 <div align="center">
-  <img src="./video-presentation-readme.gif" alt="Project demo" width="900">
+  <a href="https://youtu.be/hohbve2WNwU?si=Qv1Tyfz8-z5lxg5e"><img src="./video-presentation-readme.gif" alt="Project demo" width="900"></a>
 </div>
 
 ---
