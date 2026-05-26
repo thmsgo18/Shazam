@@ -60,6 +60,7 @@ L'approche combine la puissance des embeddings de deep learning (recherche vecto
   - [Points d'attention](#points-dattention)
   - [Technologies](#technologies)
   - [Améliorations possibles](#améliorations-possibles)
+  - [Rapport de projet](#rapport-de-projet)
   - [Références](#références)
   - [Auteur](#auteur)
 
@@ -663,6 +664,12 @@ Les pistes suivantes ont été identifiées mais non implémentées dans le cadr
 - Historique des identifications côté client (localStorage)
 - Partage du résultat via lien court
 - Affichage des paroles synchronisées (via API externe)
+
+---
+
+## Rapport de projet
+
+Pour une présentation complète de la démarche, des choix techniques et des résultats obtenus, consulter le [rapport de projet](./project_report.pdf).
 
 ---
 

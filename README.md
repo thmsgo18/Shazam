@@ -45,6 +45,7 @@ The approach combines the power of deep learning embeddings (FAISS vector search
 - [Important Notes](#important-notes)
 - [Technologies](#technologies)
 - [Future Improvements](#future-improvements)
+- [Project Report](#project-report)
 - [References](#references)
 - [Author](#author)
 
@@ -652,6 +653,12 @@ The following directions were identified but not implemented within the scope of
 - Client-side identification history (localStorage)
 - Result sharing via short link
 - Synchronized lyrics display (via external API)
+
+---
+
+## Project Report
+
+For a full presentation of the approach, technical decisions, and results, see the [project report](./project_report.pdf).
 
 ---
 
